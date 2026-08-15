@@ -1,0 +1,58 @@
+<svg viewBox="0 0 800 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fc-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8fc4e8"/>
+      <stop offset="55%" stop-color="#bfe0f2"/>
+      <stop offset="100%" stop-color="#e8f4fb"/>
+    </linearGradient>
+    <linearGradient id="fc-flag" x1="0" y1="0" x2="1" y2="0.1">
+      <stop offset="0%" stop-color="#e23a2e"/>
+      <stop offset="100%" stop-color="#b81f1a"/>
+    </linearGradient>
+    <linearGradient id="fc-mtn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5b7a9c"/>
+      <stop offset="100%" stop-color="#3f5e80"/>
+    </linearGradient>
+  </defs>
+
+  <!-- backdrop: sky + soft clouds + mountains (static) -->
+  <rect id="fc-sky-rect" width="800" height="1000" fill="url(#fc-sky)"/>
+  <g id="fc-clouds" fill="#ffffff" opacity="0.55">
+    <ellipse cx="180" cy="180" rx="90" ry="26"/>
+    <ellipse cx="250" cy="200" rx="70" ry="22"/>
+    <ellipse cx="600" cy="130" rx="100" ry="28"/>
+    <ellipse cx="680" cy="150" rx="70" ry="22"/>
+  </g>
+  <g id="fc-mountains">
+    <path d="M 0,760 L 200,520 L 360,700 L 520,470 L 720,720 L 800,640 L 800,1000 L 0,1000 Z" fill="url(#fc-mtn)"/>
+    <path d="M 200,520 L 250,585 L 150,585 Z" fill="#eef6fb" opacity="0.8"/>
+    <path d="M 520,470 L 575,545 L 465,545 Z" fill="#eef6fb" opacity="0.85"/>
+  </g>
+  <rect id="fc-ground" x="0" y="900" width="800" height="100" fill="#2f4a3a"/>
+
+  <!-- pole: static backdrop -->
+  <g id="fc-pole">
+    <rect x="196" y="230" width="10" height="700" rx="5" fill="#54606e"/>
+    <rect x="198" y="234" width="2.5" height="692" fill="#dfe8f0" opacity="0.5"/>
+    <circle cx="201" cy="224" r="9" fill="#f2c14e"/>
+  </g>
+
+  <!-- THE FLAG: hero cloth (name 'flag' → cloth-wave / field replay) -->
+  <g class="layer" data-name="flag">
+    <path d="M 206,250
+             C 300,236 400,270 500,254 C 580,241 640,252 690,272
+             L 690,286 C 650,320 588,306 520,326 C 452,346 372,320 300,346
+             C 262,360 230,364 206,368 Z" fill="url(#fc-flag)"/>
+    <circle cx="380" cy="300" r="30" fill="#f2c14e"/>
+    <path d="M 216,290 C 300,276 400,308 494,292 C 560,281 618,290 664,306"
+          stroke="#7d1512" stroke-width="3" fill="none" opacity="0.4"/>
+  </g>
+
+  <!-- TITLE -->
+  <g class="layer" data-name="title">
+    <text x="400" y="720" text-anchor="middle" font-family="-apple-system, Helvetica, sans-serif"
+      font-size="88" font-weight="900" letter-spacing="4" fill="#1f3346">SUMMIT</text>
+    <text x="400" y="770" text-anchor="middle" font-family="-apple-system, Helvetica, sans-serif"
+      font-size="20" font-weight="500" letter-spacing="12" fill="#3f5e80">EXPEDITIONS · SINCE 1971</text>
+  </g>
+</svg>

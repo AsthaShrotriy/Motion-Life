@@ -1,0 +1,64 @@
+<svg viewBox="0 0 800 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="wp-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f4c78a"/>
+      <stop offset="40%" stop-color="#f0a86b"/>
+      <stop offset="100%" stop-color="#e08a52"/>
+    </linearGradient>
+    <radialGradient id="wp-sun" cx="0.7" cy="0.34" r="0.3">
+      <stop offset="0%" stop-color="#fff4d6"/>
+      <stop offset="60%" stop-color="#ffd98a" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ffd98a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wp-field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#d9a24a"/>
+      <stop offset="100%" stop-color="#b07a2e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- sky + sun (static) -->
+  <rect id="wp-sky-rect" width="800" height="1000" fill="url(#wp-sky)"/>
+  <rect id="wp-sunglow" width="800" height="1000" fill="url(#wp-sun)"/>
+  <circle id="wp-sun-disc" cx="560" cy="340" r="60" fill="#fff4d6"/>
+  <path id="wp-hill" d="M 0,560 C 200,540 400,548 560,556 C 660,561 740,556 800,552 L 800,620 L 0,620 Z" fill="#c98f52"/>
+
+  <!-- THE WHEAT FIELD: hero sway target (captured Wind Wave → field replay).
+       Many stalk strokes give the field points for the trajectory field to
+       deform; sits over the lower ~half of the panel. -->
+  <g class="layer" data-name="wheat">
+    <rect x="0" y="560" width="800" height="440" fill="url(#wp-field)"/>
+    <g stroke="#7a5320" stroke-width="2.5" fill="none" opacity="0.55">
+      <path d="M 40,1000 C 44,860 36,760 48,600"/>
+      <path d="M 110,1000 C 116,850 104,750 120,600"/>
+      <path d="M 185,1000 C 178,860 190,760 176,600"/>
+      <path d="M 260,1000 C 266,840 254,740 270,600"/>
+      <path d="M 335,1000 C 328,860 340,760 326,600"/>
+      <path d="M 410,1000 C 416,850 404,750 420,600"/>
+      <path d="M 485,1000 C 478,860 490,760 476,600"/>
+      <path d="M 560,1000 C 566,840 554,740 570,600"/>
+      <path d="M 635,1000 C 628,860 640,760 626,600"/>
+      <path d="M 710,1000 C 716,850 704,750 720,600"/>
+      <path d="M 770,1000 C 764,860 776,760 762,600"/>
+    </g>
+    <g fill="#8a5f28" opacity="0.7">
+      <ellipse cx="48"  cy="596" rx="6" ry="14" transform="rotate(-8 48 596)"/>
+      <ellipse cx="120" cy="596" rx="6" ry="14" transform="rotate(6 120 596)"/>
+      <ellipse cx="176" cy="596" rx="6" ry="14" transform="rotate(-6 176 596)"/>
+      <ellipse cx="270" cy="596" rx="6" ry="14" transform="rotate(8 270 596)"/>
+      <ellipse cx="326" cy="596" rx="6" ry="14" transform="rotate(-7 326 596)"/>
+      <ellipse cx="420" cy="596" rx="6" ry="14" transform="rotate(6 420 596)"/>
+      <ellipse cx="476" cy="596" rx="6" ry="14" transform="rotate(-8 476 596)"/>
+      <ellipse cx="570" cy="596" rx="6" ry="14" transform="rotate(7 570 596)"/>
+      <ellipse cx="626" cy="596" rx="6" ry="14" transform="rotate(-6 626 596)"/>
+      <ellipse cx="720" cy="596" rx="6" ry="14" transform="rotate(8 720 596)"/>
+    </g>
+  </g>
+
+  <!-- TITLE -->
+  <g class="layer" data-name="title">
+    <text x="400" y="180" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+      font-size="80" font-weight="700" fill="#5a3410">Harvest</text>
+    <text x="400" y="230" text-anchor="middle" font-family="-apple-system, Helvetica, sans-serif"
+      font-size="19" font-weight="500" letter-spacing="12" fill="#7a4a1a">GOLDEN FIELDS CO.</text>
+  </g>
+</svg>

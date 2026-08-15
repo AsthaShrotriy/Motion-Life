@@ -1,0 +1,127 @@
+<svg viewBox="0 0 800 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="rn-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#0b1030"/>
+      <stop offset="42%" stop-color="#1c2350"/>
+      <stop offset="72%" stop-color="#3a3668"/>
+      <stop offset="100%" stop-color="#5b4a72"/>
+    </linearGradient>
+    <radialGradient id="rn-moon" cx="0.72" cy="0.2" r="0.28">
+      <stop offset="0%"  stop-color="#fdf6e3" stop-opacity="1"/>
+      <stop offset="30%" stop-color="#fdf6e3" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#fdf6e3" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rn-river" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#3a4a7a"/>
+      <stop offset="50%" stop-color="#26305c"/>
+      <stop offset="100%" stop-color="#161d3e"/>
+    </linearGradient>
+    <linearGradient id="rn-hill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#241f42"/>
+      <stop offset="100%" stop-color="#191534"/>
+    </linearGradient>
+    <radialGradient id="rn-fireglow" cx="0.5" cy="0.6" r="0.6">
+      <stop offset="0%"  stop-color="#ff9a3c" stop-opacity="0.85"/>
+      <stop offset="45%" stop-color="#ff6b2c" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ff6b2c" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rn-flame" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%"  stop-color="#ffcf5c"/>
+      <stop offset="55%" stop-color="#ff8a2c"/>
+      <stop offset="100%" stop-color="#ff5a2c"/>
+    </linearGradient>
+    <linearGradient id="rn-panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#05061a" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#05061a" stop-opacity="0.7"/>
+    </linearGradient>
+    <filter id="rn-soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="5"/></filter>
+  </defs>
+
+  <!-- ===== STATIC BACKDROP ===== -->
+  <rect id="rn-sky" width="800" height="1000" fill="url(#rn-sky)"/>
+  <rect id="rn-moonglow" width="800" height="700" fill="url(#rn-moon)"/>
+  <circle id="rn-moon-disc" cx="576" cy="200" r="46" fill="#fdf6e3"/>
+  <!-- stars -->
+  <g id="rn-stars" fill="#eef0ff">
+    <circle cx="120" cy="90" r="1.6" opacity="0.9"/><circle cx="230" cy="150" r="1.1" opacity="0.6"/>
+    <circle cx="330" cy="70" r="1.4" opacity="0.8"/><circle cx="440" cy="130" r="1" opacity="0.5"/>
+    <circle cx="180" cy="230" r="1.2" opacity="0.7"/><circle cx="700" cy="90" r="1.5" opacity="0.85"/>
+    <circle cx="760" cy="170" r="1.1" opacity="0.6"/><circle cx="90" cy="320" r="1.2" opacity="0.6"/>
+    <circle cx="640" cy="300" r="1" opacity="0.5"/><circle cx="500" cy="60" r="1.2" opacity="0.7"/>
+  </g>
+  <!-- distant hills -->
+  <path id="rn-hill1" d="M 0,560 C 160,500 300,540 430,516 C 560,492 690,528 800,500 L 800,640 L 0,640 Z" fill="url(#rn-hill)"/>
+  <path id="rn-hill2" d="M 0,600 C 200,566 380,596 560,574 C 660,562 740,584 800,572 L 800,660 L 0,660 Z" fill="#151129"/>
+
+  <!-- river -->
+  <rect id="rn-river-rect" x="0" y="640" width="800" height="360" fill="url(#rn-river)"/>
+  <!-- moon reflection on river (static shimmer) -->
+  <g id="rn-moonpath" fill="#e9e2c8" opacity="0.35">
+    <rect x="540" y="662" width="72" height="5" rx="2"/><rect x="528" y="690" width="96" height="5" rx="2"/>
+    <rect x="544" y="718" width="64" height="4" rx="2"/><rect x="556" y="746" width="40" height="4" rx="2"/>
+  </g>
+
+  <!-- shore + jetty (static) -->
+  <path id="rn-shore" d="M 0,860 C 120,842 260,856 360,846 L 360,1000 L 0,1000 Z" fill="#12172e"/>
+  <g id="rn-jetty">
+    <rect x="150" y="700" width="170" height="10" rx="3" fill="#0d1122"/>
+    <rect x="168" y="710" width="8" height="60" fill="#0d1122"/>
+    <rect x="292" y="710" width="8" height="60" fill="#0d1122"/>
+  </g>
+  <!-- firewood logs (static base for the flame) -->
+  <g id="rn-logs" fill="#2a1c14">
+    <rect x="196" y="880" width="76" height="12" rx="5" transform="rotate(-8 234 886)"/>
+    <rect x="196" y="882" width="76" height="12" rx="5" transform="rotate(9 234 888)"/>
+  </g>
+  <rect id="rn-fireglow-rect" x="120" y="760" width="230" height="220" fill="url(#rn-fireglow)"/>
+
+  <!-- ===== ANIMATABLE LAYERS ===== -->
+
+  <!-- 1) RIVER RIPPLE — apply "Water Ripple" / ocean motion -->
+  <g class="layer" data-name="river">
+    <g stroke="#5a6ba0" stroke-width="3" fill="none" opacity="0.5">
+      <path d="M 40,700 C 140,694 240,706 340,700"/>
+      <path d="M 420,730 C 520,724 620,736 760,730"/>
+      <path d="M 80,780 C 200,774 320,786 460,780"/>
+      <path d="M 460,830 C 580,824 680,836 780,830"/>
+      <path d="M 40,900 C 180,894 320,906 520,900"/>
+    </g>
+  </g>
+
+  <!-- 2) BOAT — apply a gentle "Sway"/bob motion -->
+  <g class="layer" data-name="boat">
+    <path d="M 360,742 C 400,742 470,742 512,742 C 506,772 490,786 436,786 C 388,786 368,770 360,742 Z" fill="#20263f"/>
+    <path d="M 372,748 C 410,748 468,748 500,748 C 496,766 484,776 438,776 C 398,776 380,764 372,748 Z" fill="#31405f"/>
+    <rect x="432" y="700" width="4" height="46" fill="#20263f"/>
+    <path d="M 436,702 L 470,738 L 436,738 Z" fill="#4a5674" opacity="0.85"/>
+  </g>
+
+  <!-- 3) CAMPFIRE FLAME — apply "Ink Bloom"/fire flicker (upward drift) -->
+  <g class="layer" data-name="flame">
+    <path d="M 234,876 C 218,858 224,838 232,820 C 238,806 236,792 246,780
+             C 250,798 262,806 262,826 C 270,818 272,806 270,794
+             C 284,812 288,842 274,866 C 262,884 246,888 234,876 Z" fill="url(#rn-flame)"/>
+    <path d="M 240,872 C 232,860 236,846 242,834 C 248,846 256,852 254,866
+             C 252,878 246,880 240,872 Z" fill="#ffe08a"/>
+  </g>
+
+  <!-- 4) BIRDS — apply a "drift"/flight motion -->
+  <g class="layer" data-name="birds">
+    <g stroke="#e8e6f2" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.85">
+      <path d="M 300,300 C 312,290 322,290 334,300"/>
+      <path d="M 348,282 C 360,272 370,272 382,282"/>
+      <path d="M 400,312 C 412,302 422,302 434,312"/>
+      <path d="M 250,340 C 262,330 272,330 284,340"/>
+      <path d="M 366,336 C 378,326 388,326 400,336"/>
+    </g>
+  </g>
+
+  <!-- ===== TITLE ===== -->
+  <rect id="rn-title-panel" x="0" y="860" width="800" height="140" fill="url(#rn-panel)"/>
+  <g class="layer" data-name="title">
+    <text x="400" y="940" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+      font-size="72" font-weight="700" letter-spacing="1" fill="#f4eede">Rivernight</text>
+    <text x="400" y="982" text-anchor="middle" font-family="-apple-system, Helvetica, sans-serif"
+      font-size="17" font-weight="500" letter-spacing="11" fill="#b9a9c8">CAMP &amp; CANOE · WILD NORTH</text>
+  </g>
+</svg>

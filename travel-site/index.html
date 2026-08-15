@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wilder Valley — Treks &amp; Stays</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <span class="brand">▲ WILDER VALLEY</span>
+    <div class="links">
+      <a href="#treks">Treks</a>
+      <a href="#gallery">Gallery</a>
+      <a href="#stay">Stay</a>
+      <a class="btn btn-solid" href="#book">Book a trek</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============ HERO ============ -->
+<!-- Demo beat: replace assets/hero.svg with the Motion Swatch export
+     and refresh. Nothing else on this page changes. -->
+<header class="hero">
+  <img src="assets/hero.svg" alt="Dusk over the Wilder Valley" class="hero-art" id="hero-img">
+  <div class="hero-copy">
+    <p class="kicker">HIMALAYAN FOOTHILLS · EST. 2019</p>
+    <h1>Three days in the valley.<br>A different pace of time.</h1>
+    <p class="sub">Guided treks, a lakeside hut, and the kind of quiet you can hear.</p>
+    <div class="btn-row">
+      <a class="btn btn-solid btn-lg" href="#book">Plan your trek →</a>
+      <a class="btn btn-ghost btn-lg" href="#gallery">See the valley</a>
+    </div>
+  </div>
+  <!-- demo control: swap the hero image live (drag & drop also works) -->
+  <button class="hero-upload" id="btn-hero-upload" title="Swap the hero illustration">
+    ⬆ Upload new image
+  </button>
+  <input type="file" id="hero-input" accept=".svg,image/svg+xml,image/*" hidden>
+  <div class="hero-drop-hint" id="hero-drop-hint">Drop image to replace the hero</div>
+</header>
+
+<script>
+(() => {
+  const img = document.getElementById('hero-img');
+  const btn = document.getElementById('btn-hero-upload');
+  const input = document.getElementById('hero-input');
+  const hero = document.querySelector('.hero');
+  const hint = document.getElementById('hero-drop-hint');
+
+  function swapTo(file) {
+    if (!file || !file.type.startsWith('image/') && !file.name.endsWith('.svg')) return;
+    const url = URL.createObjectURL(file);
+    const old = img.dataset.blobUrl;
+    img.src = url;
+    img.dataset.blobUrl = url;
+    if (old) URL.revokeObjectURL(old);
+    btn.textContent = '⬆ Upload new image';
+    btn.classList.add('swapped');
+    setTimeout(() => btn.classList.remove('swapped'), 1600);
+  }
+
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', e => { swapTo(e.target.files[0]); input.value = ''; });
+
+  // drag & drop straight onto the hero
+  ['dragenter', 'dragover'].forEach(ev => hero.addEventListener(ev, e => {
+    e.preventDefault(); hint.classList.add('show');
+  }));
+  ['dragleave', 'drop'].forEach(ev => hero.addEventListener(ev, e => {
+    e.preventDefault(); if (ev === 'dragleave' && e.target !== hero) return;
+    hint.classList.remove('show');
+  }));
+  hero.addEventListener('drop', e => {
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) swapTo(f);
+  });
+})();
+</script>
+
+<!-- ============ STATS BAND ============ -->
+<div class="stats">
+  <div><strong>48</strong><span>km of marked trails</span></div>
+  <div><strong>4</strong><span>rooms at the hut</span></div>
+  <div><strong>6</strong><span>local guides</span></div>
+  <div><strong>1,900 m</strong><span>above the noise</span></div>
+</div>
+
+<!-- ============ TREKS ============ -->
+<section id="treks">
+  <div class="section-head">
+    <div>
+      <h2>Featured treks</h2>
+      <p class="section-sub">Small groups. Local guides. Slow mornings.</p>
+    </div>
+    <a class="btn btn-outline" href="#book">View all treks</a>
+  </div>
+  <div class="cards">
+    <article class="card">
+      <img src="assets/img/waterfall.jpg" alt="Waterfall over mossy rock" loading="lazy">
+      <div class="card-body">
+        <h3>Waterfall Rim</h3>
+        <p>6 km · half day · the spray on your face by ten in the morning.</p>
+        <div class="card-foot">
+          <span class="price">₹2,400</span>
+          <a class="btn btn-small btn-solid" href="#book">Book</a>
+        </div>
+      </div>
+    </article>
+    <article class="card">
+      <img src="assets/img/lake.jpg" alt="Boats on a turquoise mountain lake" loading="lazy">
+      <div class="card-body">
+        <h3>Reed Lake Circuit</h3>
+        <p>11 km · full day · a row across, a walk back through the reeds.</p>
+        <div class="card-foot">
+          <span class="price">₹3,900</span>
+          <a class="btn btn-small btn-solid" href="#book">Book</a>
+        </div>
+      </div>
+    </article>
+    <article class="card">
+      <img src="assets/img/trail.jpg" alt="Trekkers on a mountain trail" loading="lazy">
+      <div class="card-body">
+        <h3>High Pass Traverse</h3>
+        <p>14 km · full day · snowline views and a packed lunch at the col.</p>
+        <div class="card-foot">
+          <span class="price">₹4,600</span>
+          <a class="btn btn-small btn-solid" href="#book">Book</a>
+        </div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ============ GALLERY STRIP ============ -->
+<section id="gallery" class="gallery">
+  <img src="assets/img/valley.jpg" alt="Peaks above a sea of clouds at dawn">
+  <img src="assets/img/forest.jpg" alt="Sunlit forest path">
+  <img src="assets/img/camp.jpg" alt="View from inside a tent at the campsite">
+</section>
+
+<!-- ============ STAY ============ -->
+<section id="stay" class="stay" style="background-image: linear-gradient(rgba(18,17,47,0.72), rgba(18,17,47,0.82)), url('assets/img/mist.jpg')">
+  <div class="stay-inner">
+    <div>
+      <h2>The lakeside hut</h2>
+      <p>Four rooms, a wood stove, and a flag on the roof that tells you the
+      day's wind before you step outside. Breakfast is whatever the valley
+      gave us that week.</p>
+      <div class="btn-row">
+        <a class="btn btn-solid" href="#book">Check dates</a>
+        <a class="btn btn-ghost" href="#gallery">Photos of the hut</a>
+      </div>
+    </div>
+    <blockquote>
+      “We came for the waterfall and stayed an extra night for the silence.”
+      <cite>— Meera, Bengaluru</cite>
+    </blockquote>
+  </div>
+</section>
+
+<!-- ============ BOOK CTA ============ -->
+<section id="book" class="book-band">
+  <h2>The valley is waiting.</h2>
+  <p>June to October · groups of 8 or fewer · guides born here</p>
+  <a class="btn btn-solid btn-lg" href="mailto:hello@wildervalley.example">Start planning →</a>
+</section>
+
+<footer>
+  <div class="foot-inner">
+    <span class="brand">▲ WILDER VALLEY</span>
+    <p>hello@wildervalley.example · +91 00000 00000</p>
+    <p class="fine">Hero illustration: <code>assets/hero.svg</code> · Photos: Unsplash</p>
+  </div>
+</footer>
+
+</body>
+</html>
