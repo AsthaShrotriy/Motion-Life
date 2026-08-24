@@ -210,9 +210,8 @@ class SelectionManager {
       wrap,
       center: [bb.x + bb.width / 2, bb.y + bb.height / 2],
       motionId: null, speed: 1.0, intensity: 1.0,
-      // decided when a motion is applied: a captured trajectory field turns on
-      // geometry deformation; artwork marked data-motion-mode="rigid" stays off
-      waveMode: false,
+      // cloth-like names default to wave (geometry) deformation
+      waveMode: /flag|banner|cloth|pennant|curtain|sail/i.test(name),
     };
     this.selections.push(sel);
     this.activeIdx = this.selections.length - 1;
@@ -234,20 +233,15 @@ class SelectionManager {
 
     this.selections.forEach((s, i) => {
       if (s.kind !== 'svg') return;
-      const active = i === this.activeIdx;
       const bb = s.wrap.getBBox();
-      const pad = active ? 6 : 4;
       const rect = document.createElementNS(SVGNS, 'rect');
-      rect.setAttribute('x', bb.x - pad); rect.setAttribute('y', bb.y - pad);
-      rect.setAttribute('width', bb.width + pad * 2); rect.setAttribute('height', bb.height + pad * 2);
-      rect.setAttribute('rx', 3);
-      // the ACTIVE object gets an extra highlight: a translucent fill + bolder solid outline
-      rect.setAttribute('fill', active ? s.color : 'none');
-      rect.setAttribute('fill-opacity', active ? 0.16 : 0);
+      rect.setAttribute('x', bb.x - 4); rect.setAttribute('y', bb.y - 4);
+      rect.setAttribute('width', bb.width + 8); rect.setAttribute('height', bb.height + 8);
+      rect.setAttribute('fill', 'none');
       rect.setAttribute('stroke', s.color);
-      rect.setAttribute('stroke-width', active ? 3 : 1.5);
-      rect.setAttribute('stroke-dasharray', active ? 'none' : '4 4');
-      rect.setAttribute('opacity', active ? 1 : 0.5);
+      rect.setAttribute('stroke-width', i === this.activeIdx ? 2.5 : 1.5);
+      rect.setAttribute('stroke-dasharray', i === this.activeIdx ? '8 4' : '4 4');
+      rect.setAttribute('opacity', i === this.activeIdx ? 1 : 0.55);
       // move the highlight along with its target wrap
       const tr = s.wrap.getAttribute('transform');
       if (tr) rect.setAttribute('transform', tr);

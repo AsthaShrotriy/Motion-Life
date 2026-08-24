@@ -1,12 +1,5 @@
 /*
- * distill.js — flow tensor → swatch parameters (in-browser Lucas–Kanade
- * fallback for when the RAFT service is offline).
- *
- * Kept in contract-parity with the Python service distill(): returns the same
- * keys — including driftX/driftY (steady travel) and swingPx (physical
- * displacement) — and applies the same Hann window before its FFTs to suppress
- * spectral leakage. The math is a rougher LK-based approximation, but the
- * output shape matches so the frontend behaves identically on either path.
+ * distill.js — flow tensor → swatch parameters (carried from v1).
  */
 
 function distillSwatch(frames, fps) {
@@ -22,11 +15,6 @@ function distillSwatch(frames, fps) {
     gvy[t] = n ? sy / n : 0;
   }
   const mx = _mean(gvx), my = _mean(gvy);
-  // keep the DC component as steady DRIFT before removing it (matches the
-  // service: 0.5% of frame width per frame → ±1). FLOW_W from flow.js.
-  const FW = (window.FLOW_DIMS && window.FLOW_DIMS.FLOW_W) || 160;
-  const driftX = _clampSigned(mx / (0.005 * FW));
-  const driftY = _clampSigned(my / (0.005 * FW));
   for (let t = 0; t < T; t++) { gvx[t] -= mx; gvy[t] -= my; }
 
   let cxx = 0, cxy = 0, cyy = 0;
@@ -44,12 +32,7 @@ function distillSwatch(frames, fps) {
   const proj = new Float64Array(T);
   for (let t = 0; t < T; t++) proj[t] = gvx[t] * ax + gvy[t] * ay;
 
-  // Hann-window a copy for the FFT (suppresses leakage → sharper freq & phase);
-  // keep the unwindowed proj for the autocorrelation-based damping below.
-  const win = _hann(T);
-  const projW = new Float64Array(T);
-  for (let t = 0; t < T; t++) projW[t] = proj[t] * win[t];
-  const { spectrum, peakBin } = _dft(projW);
+  const { spectrum, peakBin } = _dft(proj);
   const binHz = fps / T;
   let freqHz = peakBin * binHz;
   if (peakBin > 1 && peakBin < spectrum.length - 1) {
@@ -72,28 +55,16 @@ function distillSwatch(frames, fps) {
 
   const damping = _autocorrDecay(proj, fps, freqHz);
   const phaseSpread = _phaseSpread(frames, ax, ay, peakBin);
-  // physical peak swing (velocity amplitude ÷ angular frequency), gated to 0
-  // for near-static clips so "no motion in → no motion out".
-  const swingPx = (freqHz > 1e-6 && amplitude > 0.02)
-    ? rms * fps / (2 * Math.PI * freqHz) : 0;
 
   return {
     frequency: _r3(freqHz), amplitude: _r3(amplitude), direction: Math.round(direction),
     turbulence: _r3(turbulence), damping: _r3(damping), phaseSpread: _r3(phaseSpread),
-    swingPx: Math.round(swingPx * 100) / 100,
-    driftX: _r3(driftX), driftY: _r3(driftY),
   };
 }
 
 function _mean(a) { let s = 0; for (const v of a) s += v; return s / a.length; }
 function _clamp(v) { return Math.max(0, Math.min(1, v)); }
-function _clampSigned(v) { return Math.max(-1, Math.min(1, v)); }
 function _r3(v) { return Math.round(v * 1000) / 1000; }
-function _hann(T) {
-  const w = new Float64Array(T);
-  for (let t = 0; t < T; t++) w[t] = 0.5 - 0.5 * Math.cos(2 * Math.PI * t / (T - 1));
-  return w;
-}
 
 function _dft(signal) {
   const T = signal.length, half = T >> 1;
@@ -136,11 +107,10 @@ function _autocorrDecay(signal, fps, freqHz) {
 
 function _phaseSpread(frames, ax, ay, k) {
   const T = frames.length, N = frames[0].length;
-  const win = _hann(T);   // Hann-windowed single-bin DFT (matches the service)
   let cx = 0, cy = 0, n = 0;
   for (let i = 0; i < N; i++) {
     let re = 0, im = 0, energy = 0;
-    for (let t = 0; t < T; t++) { const p = frames[t][i]; const s = (p.valid ? p.vx * ax + p.vy * ay : 0) * win[t]; const ph = -2 * Math.PI * k * t / T; re += s * Math.cos(ph); im += s * Math.sin(ph); energy += s * s; }
+    for (let t = 0; t < T; t++) { const p = frames[t][i]; const s = p.valid ? p.vx * ax + p.vy * ay : 0; const ph = -2 * Math.PI * k * t / T; re += s * Math.cos(ph); im += s * Math.sin(ph); energy += s * s; }
     if (energy / T < 0.005) continue;
     const mag = Math.hypot(re, im) || 1; cx += re / mag; cy += im / mag; n++;
   }

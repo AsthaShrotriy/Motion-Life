@@ -1,0 +1,6 @@
+# VLM Router service — Claude vision + frame sampling.
+# The [bedrock] extra pulls boto3/botocore so the router can call Claude via
+# Amazon Bedrock using the standard AWS credential chain (no API key needed).
+anthropic[bedrock]>=0.40
+opencv-python
+numpy

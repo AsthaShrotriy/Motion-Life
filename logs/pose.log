@@ -1,0 +1,10 @@
+pose_server on http://127.0.0.1:8870  (POST /extract with video bytes)
+[pose] kind=pose fmt=legacy from 3984 KB clip…
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1787569772.053213 23249273 gl_context.cc:357] GL version: 2.1 (2.1 Metal - 89.4), renderer: Apple M4 Max
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+W0000 00:00:1787569772.107414 23253426 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1787569772.112041 23253435 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+/Users/ashrotriy/workspace/motion-swatch-main/motion-swatch-main/mpvenv/lib/python3.12/site-packages/google/protobuf/symbol_database.py:55: UserWarning: SymbolDatabase.GetPrototype() is deprecated. Please use message_factory.GetMessageClass() instead. SymbolDatabase.GetPrototype() will be removed soon.
+  warnings.warn('SymbolDatabase.GetPrototype() is deprecated. Please '
+[pose] detected 155/155 frames

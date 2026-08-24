@@ -60,7 +60,7 @@ const MOTION_PRESETS = [
     name: 'Autumn Fall',
     desc: 'Lazy downward drift with sideways sway — tuned for autumn poster leaves',
     color: '#d97a2b',
-    params: { frequency: 0.38, amplitude: 0.42, direction: 270, turbulence: 0.32, damping: 0.08, phaseSpread: 0.85, driftX: -0.05, driftY: 0.9 },
+    params: { frequency: 0.38, amplitude: 0.42, direction: 270, turbulence: 0.32, damping: 0.08, phaseSpread: 0.85, driftX: -0.05, driftY: 0.9, leafFall: true },
   },
   {
     id: 'rising-smoke',

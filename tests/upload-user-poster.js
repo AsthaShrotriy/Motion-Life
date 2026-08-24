@@ -18,7 +18,7 @@ const ok = (c, m) => { console.log((c ? '✅ ' : '❌ FAIL: ') + m); if (!c) FAI
     page.waitForFileChooser(),
     page.click('#btn-upload-art'),
   ]);
-  await chooser.accept([process.env.POSTER || '/Users/prajjwas/Downloads/motionSwatch/poster (1).svg']);
+  await chooser.accept([process.env.POSTER]);
   await new Promise(r => setTimeout(r, 800));
 
   const r = await page.evaluate(async () => {

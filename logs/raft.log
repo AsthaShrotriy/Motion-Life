@@ -1,0 +1,6 @@
+[engines] registered: raft_small:flow, raft_large:flow, searaft:flow, cotracker3:trajectory, evm:preproc, yolo_bytetrack:object_path, keypointrcnn:skeleton, pose_mediapipe:skeleton, wham:skeleton, mmpose_animal:skeleton, tapir:trajectory, objectron:object_path, mdm:text2motion, droid_slam:camera, sam2:segment, depth:depth
+INFO:     Started server process [17040]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8865 (Press CTRL+C to quit)
+INFO:     127.0.0.1:52766 - "GET /health HTTP/1.1" 200 OK

@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320" width="480" height="320">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bfe3ff"/>
+      <stop offset="1" stop-color="#eaf6ff"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4aa3d6"/>
+      <stop offset="1" stop-color="#2f6f9e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- static background -->
+  <rect x="0" y="0" width="480" height="320" fill="url(#sky)"/>
+  <polygon points="0,210 120,110 240,210" fill="#9bb0a5"/>
+  <polygon points="150,210 300,90 450,210" fill="#8aa398"/>
+
+  <!-- ===== selectable, animatable objects ===== -->
+  <g class="layer" data-name="Sun">
+    <circle cx="410" cy="70" r="26" fill="#ffd24a"/>
+    <g stroke="#ffd24a" stroke-width="4" stroke-linecap="round">
+      <line x1="410" y1="26" x2="410" y2="10"/>
+      <line x1="410" y1="130" x2="410" y2="114"/>
+      <line x1="366" y1="70" x2="350" y2="70"/>
+      <line x1="470" y1="70" x2="454" y2="70"/>
+      <line x1="379" y1="39" x2="368" y2="28"/>
+      <line x1="452" y1="112" x2="441" y2="101"/>
+    </g>
+  </g>
+
+  <g class="layer" data-name="Cloud Left">
+    <g fill="#ffffff">
+      <ellipse cx="90" cy="70" rx="34" ry="20"/>
+      <ellipse cx="120" cy="62" rx="26" ry="18"/>
+      <ellipse cx="62" cy="66" rx="22" ry="15"/>
+    </g>
+  </g>
+
+  <g class="layer" data-name="Cloud Right">
+    <g fill="#ffffff">
+      <ellipse cx="250" cy="55" rx="30" ry="17"/>
+      <ellipse cx="278" cy="49" rx="22" ry="15"/>
+    </g>
+  </g>
+
+  <g class="layer" data-name="Bird Left">
+    <path d="M120 120 q10 -10 20 0 q10 -10 20 0" fill="none" stroke="#333" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <g class="layer" data-name="Bird Right">
+    <path d="M300 100 q10 -10 20 0 q10 -10 20 0" fill="none" stroke="#333" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <g class="layer" data-name="Tree">
+    <rect x="66" y="196" width="12" height="40" fill="#7a5230"/>
+    <circle cx="72" cy="188" r="28" fill="#3f8f4f"/>
+    <circle cx="52" cy="196" r="20" fill="#4aa05c"/>
+    <circle cx="92" cy="196" r="20" fill="#4aa05c"/>
+  </g>
+
+  <g class="layer" data-name="Flag">
+    <rect x="356" y="150" width="5" height="86" fill="#6b6b6b"/>
+    <path d="M361 154 q22 -8 44 0 q22 8 44 0 l0 34 q-22 8 -44 0 q-22 -8 -44 0 Z" fill="#e23b3b"/>
+  </g>
+
+  <!-- river surface -->
+  <g class="layer" data-name="Water">
+    <path d="M0 236 q60 -10 120 0 q60 10 120 0 q60 -10 120 0 q60 10 120 0 L480 320 L0 320 Z" fill="url(#water)"/>
+  </g>
+
+  <!-- a little boat floating on the water -->
+  <g class="layer" data-name="Boat">
+    <path d="M188 250 l48 0 l-8 16 l-32 0 Z" fill="#c8792e"/>
+    <rect x="210" y="228" width="3" height="22" fill="#7a5230"/>
+    <path d="M213 230 l20 14 l-20 4 Z" fill="#ffffff"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+# Character-motion (pose) service — MediaPipe pose extraction.
+# Step 3 adds Hands (21 lm) + FaceMesh (468 lm) via ?kind=hands|face — these reuse
+# the SAME mediapipe wheel below (mp.solutions.hands / face_mesh), no new dependency
+# and no model download.
+# IMPORTANT: MediaPipe needs Python <= 3.12 (no wheel for 3.13). Create a
+# dedicated venv with python3.9/3.10/3.11/3.12, NOT the main service/venv (3.13).
+mediapipe==0.10.14
+opencv-python

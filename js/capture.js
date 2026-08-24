@@ -9,7 +9,10 @@
  * (FlowTracker + distillSwatch), same parameter contract.
  */
 
-const SERVICE_URL = 'http://127.0.0.1:8765';
+const SERVICE_URL = 'http://127.0.0.1:8865';
+const POSE_SERVICE_URL = 'http://127.0.0.1:8870';   // MediaPipe character-pose service
+const ROUTER_SERVICE_URL = 'http://127.0.0.1:8871'; // VLM Router (motion decomposition)
+const PREPROCESS_SERVICE_URL = 'http://127.0.0.1:8872'; // Step 2: mask + camera motion
 
 class MotionCapture {
   constructor() {
@@ -29,21 +32,99 @@ class MotionCapture {
     } catch { return null; }
   }
 
-  async captureFromFile(file) {
-    // ---- preferred: deep-flow analysis service ----
+  /* VLM Router (Step 1): POST the clip to the router, which asks Claude vision to
+     decompose it into distinct motions. Returns Contract-A JSON
+     { static, motions:[{ id, label, class, bbox, confidence, backend, applicator }] }
+     or null if the router isn't running. Used to auto-classify/route a clip instead
+     of guessing from filenames or layer names. */
+  async decomposeMotion(file) {
+    try {
+      const resp = await fetch(ROUTER_SERVICE_URL + '/decompose', { method: 'POST', body: file });
+      const j = await resp.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    } catch (e) {
+      console.warn('[router] decompose unavailable:', e.message);
+      return null;
+    }
+  }
+
+  /* Preprocess (Step 2): given a clip + one Contract-A motion (with a bbox), get a
+     clean object mask + camera motion so downstream extraction runs only inside the
+     masked object. `motion` is a Contract-A entry { id, class, bbox:[x,y,w,h] }.
+     Returns a region_preprocess contract, or null if the service isn't running
+     (caller then falls back to the raw router bbox as a rectangular mask). */
+  async preprocessRegion(file, motion) {
+    const b = (motion && motion.bbox) || [0, 0, 1, 1];
+    const qs = `motion_id=${encodeURIComponent(motion && motion.id || '')}` +
+               `&class=${encodeURIComponent(motion && motion.class || '')}` +
+               `&bbox=${b.map(v => (+v).toFixed(4)).join(',')}`;
+    try {
+      const resp = await fetch(`${PREPROCESS_SERVICE_URL}/preprocess?${qs}`,
+                               { method: 'POST', body: file });
+      const j = await resp.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    } catch (e) {
+      console.warn('[preprocess] region preprocess unavailable:', e.message);
+      return null;
+    }
+  }
+
+  /* Character / skeletal motion: POST the clip to the MediaPipe pose service,
+     which returns a captured pose sequence (joints + per-frame keypoints).
+     Returns {joints, fps, frames, detected, total} or null if unavailable. */
+  async captureCharacter(file, kind = 'pose') {
+    // kind: 'pose' (default, byte-compatible response the rig consumes) | 'hands' | 'face'.
+    // hands/face return a Contract-B skeleton swatch (subject!=='pose') and must NOT be
+    // routed to the body rig (_applyCharacter) — see js/animate.js.
+    const qs = kind && kind !== 'pose' ? `?kind=${encodeURIComponent(kind)}` : '';
+    try {
+      const resp = await fetch(POSE_SERVICE_URL + '/extract' + qs, { method: 'POST', body: file });
+      const j = await resp.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    } catch (e) {
+      console.warn('[pose] captureCharacter unavailable:', e.message);
+      return null;   // matches decomposeMotion/preprocessRegion; caller guards on !pose
+    }
+  }
+
+  /* Ask the service which extractor to use for a VLM-detected motion class.
+     Returns {engine, kind, available, reason} or null if the service is down. */
+  async route(cls, attrs = {}) {
+    try {
+      const p = new URLSearchParams({ cls });
+      if (attrs.subject_type) p.set('subject_type', attrs.subject_type);
+      if (attrs.count) p.set('count', attrs.count);
+      const r = await fetch(SERVICE_URL + '/route?' + p.toString());
+      return await r.json();
+    } catch { return null; }
+  }
+
+  async captureFromFile(file, opts = {}) {
+    // opts.engine (FLOW) / opts.tracker (TRAJECTORY) / opts.preproc select a pluggable
+    // backend; omitted -> the raft_small default (byte-identical to before).
     const svc = await this.serviceAvailable();
     if (svc) {
       try {
-        if (this.onProgress) this.onProgress(-1, `Analyzing with ${svc.engine}…`);
+        if (this.onProgress) this.onProgress(-1, `Analyzing with ${opts.engine || opts.tracker || svc.engine}…`);
         const form = new FormData();
         form.append('file', file, file.name);
-        const resp = await fetch(SERVICE_URL + '/analyze', { method: 'POST', body: form });
+        const qs = [];
+        if (opts.engine) qs.push('engine=' + encodeURIComponent(opts.engine));
+        if (opts.tracker) qs.push('tracker=' + encodeURIComponent(opts.tracker));
+        if (opts.preproc) qs.push('preproc=' + encodeURIComponent(opts.preproc));
+        if (opts.bbox) qs.push('bbox=' + opts.bbox.map(v => (+v).toFixed(4)).join(','));
+        const url = SERVICE_URL + '/analyze' + (qs.length ? '?' + qs.join('&') : '');
+        const resp = await fetch(url, { method: 'POST', body: form });
         const j = await resp.json();
         if (j.ok) {
+          const via = j.engine + (j.tracker && j.tracker !== 'raft-grid' ? ' + ' + j.tracker : '');
           const motion = {
             id: 'uploaded-' + Date.now(),
             name: file.name.replace(/\.[^.]+$/, ''),
-            desc: `Captured via ${j.engine} (${j.frames_analyzed} frames)`,
+            desc: `Captured via ${via} (${j.frames_analyzed} frames)`,
             color: '#ff8a4c',
             params: j.params,
             fromUpload: true,

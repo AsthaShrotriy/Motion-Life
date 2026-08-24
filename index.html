@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <script>(function(){var t=localStorage.getItem('ml-theme')||'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
-<link rel="stylesheet" href="css/style.css?v=41">
+<link rel="stylesheet" href="css/style.css?v=47">
 </head>
 <body>
 <header>
@@ -15,10 +15,16 @@
     <h1>MotionLife</h1>
     <span class="tagline">Select an object. Apply a motion. Bring your art to life.</span>
   </div>
-  <div class="header-center"></div>
+  <div class="header-center">
+    <div class="scene-tabs">
+      <button class="scene-tab active" data-scene="poster">Poster</button>
+      <button class="scene-tab" data-scene="scenery">Scenery</button>
+      <button class="scene-tab" data-scene="character">Character</button>
+    </div>
+  </div>
   <div class="header-right">
     <button id="btn-play" class="play-btn">▶ Play</button>
-    <button id="btn-preview" class="subtle-btn">Preview</button>
+    <button id="btn-export-video" class="subtle-btn">Export video</button>
     <button id="btn-upload-art" class="subtle-btn">Upload artwork</button>
     <input type="file" id="art-input" accept="image/*,.svg" hidden>
   </div>
@@ -116,45 +122,21 @@
 
 <button id="theme-toggle" class="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">☀️</button>
 
-<!-- ===== PREVIEW MODAL ===== -->
-<div id="preview-modal" class="preview-modal" hidden>
-  <div class="preview-panel">
-    <div class="preview-head">
-      <div class="preview-title">Preview</div>
-      <div class="preview-head-actions">
-        <button id="preview-download" class="play-btn">⭳ Download</button>
-        <button id="preview-close" class="preview-close" aria-label="Close preview">×</button>
-      </div>
-    </div>
-    <div class="preview-body">
-      <div class="preview-col preview-col-static">
-        <div class="preview-col-title">Original artwork</div>
-        <div id="preview-static" class="preview-stage"></div>
-      </div>
-      <div class="preview-col preview-col-live">
-        <div class="preview-col-title">MotionLife</div>
-        <div id="preview-live" class="preview-stage"></div>
-      </div>
-      <div class="preview-col preview-col-videos">
-        <div class="preview-col-title">Motion videos used</div>
-        <div id="preview-videos" class="preview-videos"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script src="js/flow.js?v=41"></script>
-<script src="js/distill.js?v=41"></script>
-<script src="js/motions.js?v=41"></script>
-<script src="js/scenery.js?v=41"></script>
-<script src="js/poster.js?v=41"></script>
-<script src="js/regions.js?v=41"></script>
-<script src="js/animate.js?v=41"></script>
-<script src="js/export.js?v=41"></script>
-<script src="js/videoexport.js?v=41"></script>
-<script src="js/extractviz.js?v=41"></script>
-<script src="js/multipick.js?v=41"></script>
-<script src="js/capture.js?v=41"></script>
-<script src="js/main.js?v=41"></script>
+<script src="js/flow.js?v=47"></script>
+<script src="js/distill.js?v=47"></script>
+<script src="js/motions.js?v=47"></script>
+<script src="js/scenery.js?v=47"></script>
+<script src="js/poster.js?v=47"></script>
+<script src="js/regions.js?v=47"></script>
+<script src="js/motionfields.js?v=47"></script>
+<script src="js/animate.js?v=47"></script>
+<script src="js/export.js?v=47"></script>
+<script src="js/videoexport.js?v=47"></script>
+<script src="js/extractviz.js?v=47"></script>
+<script src="js/multipick.js?v=47"></script>
+<script src="js/skeletonviz.js?v=47"></script>
+<script src="js/capture.js?v=47"></script>
+<script src="js/upload.js?v=47"></script>
+<script src="js/main.js?v=47"></script>
 </body>
 </html>

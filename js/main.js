@@ -45,6 +45,10 @@ function hexToRgb(hex) {
 }
 
 function buildChipState(m) {
+  // character motion: the swatch IS the extracted stick figure (animated)
+  if (m.pose && m.pose.joints && m.pose.frames && m.pose.frames.length) {
+    return { pose: { joints: m.pose.joints, fps: m.pose.fps || 15, frames: m.pose.frames.filter(Boolean) } };
+  }
   if (m.trajectories && m.trajectories.length >= 25) {
     // subsample the 12x12 grid to 5x5, store drift-removed relative tracks
     const G = Math.round(Math.sqrt(m.trajectories.length));   // 12
@@ -119,10 +123,20 @@ function chipLoop() {
   requestAnimationFrame(chipLoop);
   const t = performance.now() / 1000;
   for (const tile of chipTiles) {
-    const { canvas, ctx, motion, tracks } = tile;
+    const { canvas, ctx, motion, tracks, pose } = tile;
     if (!canvas.isConnected) continue;
     const S = canvas.width;
     const [r, g, b] = hexToRgb(motion.color || '#7c6cff');
+
+    // ---- character swatch: the extracted stick figure, looping ----
+    if (pose && window.drawSkeletonFrame) {
+      ctx.fillStyle = '#0e1420'; ctx.fillRect(0, 0, S, S);
+      const n = pose.frames.length;
+      const fi = Math.floor(t * pose.fps) % n;
+      window.drawSkeletonFrame(ctx, pose.frames[fi], pose.joints, S, S,
+        { pad: S * 0.17, color: motion.color || '#34d399', lineWidth: Math.max(2, S * 0.02), jointR: Math.max(2, S * 0.02) });
+      continue;
+    }
 
     // motion-blur fade instead of clear → dots drag trails
     ctx.fillStyle = 'rgba(26,27,42,0.28)';
@@ -184,14 +198,17 @@ function applyMotionToActive() {
     // unless the artwork marks the selected object as structurally rigid.
     if (motionMode === 'rigid') {
       s.waveMode = false;
-    } else if (s.kind === 'svg' && m.trajectories && m.trajectories.length) {
+    } else if (s.kind === 'svg' && m.trajectories && m.trajectories.length && !(m.params && m.params.leafFall)) {
       s.waveMode = true;
     }
+    if (m.params && m.params.leafFall) s.waveMode = false;
     // switching motions invalidates deformation caches
     if (s.wrap) {
       for (const el of s.wrap.querySelectorAll('path[data-ms-d0]')) el.setAttribute('d', el.getAttribute('data-ms-d0'));
     }
+    if (s._leaves) { for (const lf of s._leaves) { lf.el.removeAttribute('transform'); lf.el.style.opacity = ''; } s._leaves = null; }
     s._wave = null; s._field = undefined; s._fieldMotion = null; s._text = undefined;
+    s._char = null; s._charMotion = null;
     showInspector(s);
     if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw();
     return s.name;
@@ -208,6 +225,7 @@ let currentScene = 'poster';
 // an uploaded artwork (so the .layer[data-name] contract makes objects selectable)
 const FILE_SCENES = {
   train: 'assets/scenes/train-window-adobe.svg',
+  character: 'assets/scenes/character-bear.svg',
 };
 
 async function loadScene(name) {
@@ -247,30 +265,7 @@ for (const b of document.querySelectorAll('.scene-tab'))
 
 function loadDefaultScenery() { loadScene('scenery'); }
 
-// blank white artboard — the default canvas; the user uploads their own artwork
-const SVGNS = 'http://www.w3.org/2000/svg';
-function loadBlank() {
-  animator.pause();
-  $('btn-play').textContent = '▶ Play';
-  $('btn-play').classList.remove('playing');
-  artContainer.innerHTML = '';
-  const svg = document.createElementNS(SVGNS, 'svg');
-  svg.setAttribute('viewBox', '0 0 800 500');
-  svg.style.width = '100%'; svg.style.height = '100%';
-  const bg = document.createElementNS(SVGNS, 'rect');
-  bg.setAttribute('x', 0); bg.setAttribute('y', 0);
-  bg.setAttribute('width', 800); bg.setAttribute('height', 500);
-  bg.setAttribute('fill', '#ffffff');
-  svg.appendChild(bg);
-  artContainer.appendChild(svg);
-  syncOverlay();
-  setModeUI('svg');
-  renderChips(); hideInspector(); showLayers();
-  status('Blank artboard — upload artwork to begin.');
-}
-
 function loadUploadedSVG(text) {
-  animator.pause();
   artContainer.innerHTML = text;
   const svg = artContainer.querySelector('svg');
   if (!svg) { status('That SVG could not be parsed.'); return; }
@@ -288,7 +283,6 @@ function loadUploadedSVG(text) {
 }
 
 function loadRasterImage(dataUrl) {
-  animator.pause();
   artContainer.innerHTML = `<img src="${dataUrl}" draggable="false">`;
   syncOverlay();
   sel.attachRaster();
@@ -346,8 +340,7 @@ function showLayers() {
   const section = $('layers-section');
   if (!section) return;
   const svg = artContainer.querySelector('svg');
-  // hide when there's no artwork with groups (raster, or the blank artboard)
-  if (!svg || layerGroups(svg).length === 0) { section.hidden = true; return; }
+  if (!svg) { section.hidden = true; return; }   // raster: no groups to show
   section.hidden = false;
   renderLayers(svg);
 }
@@ -452,7 +445,19 @@ $('btn-remove-motion').onclick = () => {
   const s = sel.getActive();
   if (!s) return;
   s.motionId = null;
-  if (s.wrap) s.wrap.setAttribute('transform', '');
+  if (s.wrap) {
+    s.wrap.setAttribute('transform', '');
+    const canopy = s.wrap.querySelector('[data-motion-role="tree-canopy"]');
+    if (canopy) canopy.removeAttribute('transform');
+  }
+  if (s._leaves) {
+    for (const lf of s._leaves) {
+      lf.el.removeAttribute('transform');
+      lf.el.style.opacity = '';
+    }
+    s._leaves = null;
+    s._leavesMotion = null;
+  }
   if (s.floatEl) s.floatEl.style.transform = '';
   showInspector(s);
   renderChips();
@@ -470,124 +475,46 @@ $('btn-tool-rect').onclick = () => { sel.setTool('rect'); $('btn-tool-rect').cla
 //  Animator + play
 // =========================================================================
 const animator = new Animator(sel, library);
-// single source of truth: the button always reflects the animator's real state
-function syncPlayButton() {
-  const p = animator.playing;
-  const b = $('btn-play');
-  if (!b) return;
-  b.textContent = p ? '⏸ Pause' : '▶ Play';
-  b.classList.toggle('playing', p);
-}
-animator.onchange = syncPlayButton;
-
 $('btn-play').onclick = () => {
-  // block only STARTING with nothing animated; pausing must always work
-  if (!animator.playing && !sel.selections.some(s => s.motionId)) {
+  if (!sel.selections.some(s => s.motionId)) {
     status('Assign a motion to at least one object first.');
     return;
   }
-  animator.toggle();
-  sel.setHighlightsHidden(false);   // keep selection outlines visible in play AND pause
-  status(animator.playing ? 'Playing.' : 'Paused.');
+  const playing = animator.toggle();
+  sel.setHighlightsHidden(playing);   // outlines only in pause state
+  $('btn-play').textContent = playing ? '⏸ Pause' : '▶ Play';
+  $('btn-play').classList.toggle('playing', playing);
+  status(playing ? 'Playing.' : 'Paused.');
 };
 
 // =========================================================================
-//  Video export (reusable — driven by the Preview panel's Download button)
+//  Video export (for Reels)
 // =========================================================================
-async function runExport(btnEl) {
-  if (!sel.selections.some(s => s.motionId)) { status('Nothing is animated yet.'); return; }
-  const label = btnEl ? btnEl.textContent : '';
-  if (btnEl) btnEl.disabled = true;
+$('btn-export-video').onclick = async () => {
+  if (!sel.selections.some(s => s.motionId)) {
+    status('Nothing is animated yet.'); return;
+  }
+  const btn = $('btn-export-video');
+  btn.disabled = true;
   const wasPlaying = animator.playing;
   if (!wasPlaying) animator.play();
   try {
     const blob = await exportVideo(sel, animator, {
       seconds: 8, mode: 'flat',
-      onProgress: p => { if (btnEl) btnEl.textContent = p < 1 ? `Recording… ${Math.round(p * 100)}%` : label; },
+      onProgress: p => { btn.textContent = p < 1 ? `Recording… ${Math.round(p * 100)}%` : 'Export video'; },
     });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'motionlife.' + (blob.type.includes('mp4') ? 'mp4' : 'webm');
     a.click(); URL.revokeObjectURL(a.href);
-    status('Video downloaded — matches the artwork size.', true);
+    status('Video exported — 1600×1000, matches the artwork size.', true);
   } catch (err) {
     status('Video export failed: ' + err.message);
   }
   if (!wasPlaying) animator.pause();
-  if (btnEl) { btnEl.textContent = label; btnEl.disabled = false; }
-}
-
-// =========================================================================
-//  Preview panel — Original | MotionLife (live) | Source Motion  + Download
-// =========================================================================
-let previewHome = null;
-function closePreview() {
-  const modal = $('preview-modal');
-  animator.pause();
-  if (previewHome) { previewHome.parent.insertBefore(artContainer, previewHome.next); previewHome = null; }
-  sel.setHighlightsHidden(false);
-  if (sel.mode === 'svg') sel._renderSVGHighlights();
-  syncOverlay();
-  if (modal) modal.hidden = true;
-  $('preview-static').innerHTML = '';
-  $('preview-videos').innerHTML = '';
-  $('btn-play').textContent = '▶ Play'; $('btn-play').classList.remove('playing');
-}
-function openPreview() {
-  const svg = artContainer.querySelector('svg');
-  if (!svg) { status('Load artwork first.'); return; }
-  const modal = $('preview-modal');
-  if (!modal) return;
-
-  animator.pause();   // freeze so the "Original" side has no motion baked in
-
-  // Original: a pristine, static clone (outlines stripped)
-  const staticBox = $('preview-static'); staticBox.innerHTML = '';
-  const clone = svg.cloneNode(true);
-  const chl = clone.querySelector('#ms-highlights'); if (chl) chl.remove();
-  clone.style.width = '100%'; clone.style.height = '100%';
-  staticBox.appendChild(clone);
-
-  // MotionLife: move the REAL artwork into the live slot so the animator drives it
-  sel.setHighlightsHidden(true);          // clean preview, no selection outlines
-  previewHome = { parent: artContainer.parentNode, next: artContainer.nextSibling };
-  $('preview-live').appendChild(artContainer);
-
-  // Motion videos used: clips whose motion is actually applied on canvas
-  const usedIds = new Set(sel.selections.filter(s => s.motionId).map(s => s.motionId));
-  const vids = uploadedVideos.filter(v => v.motionId && usedIds.has(v.motionId));
-  const list = vids.length ? vids : uploadedVideos;
-  const vbox = $('preview-videos'); vbox.innerHTML = '';
-  if (!list.length) {
-    vbox.innerHTML = '<div class="preview-empty">No source video — a built-in preset motion is applied.</div>';
-  } else {
-    list.forEach(v => {
-      const c = document.createElement('div'); c.className = 'preview-video';
-      const vid = document.createElement('video');
-      vid.src = v.url; vid.muted = true; vid.loop = true; vid.autoplay = true;
-      vid.playsInline = true; vid.setAttribute('playsinline', '');
-      const nm = document.createElement('div'); nm.className = 'preview-video-name'; nm.textContent = v.name;
-      c.append(vid, nm); vbox.appendChild(c); vid.play().catch(() => {});
-    });
-  }
-
-  modal.hidden = false;
-  animator.play();
-  $('btn-play').textContent = '⏸ Pause'; $('btn-play').classList.add('playing');
-}
-const btnPreview = $('btn-preview');
-if (btnPreview) btnPreview.onclick = openPreview;
-const btnPreviewClose = $('preview-close');
-if (btnPreviewClose) btnPreviewClose.onclick = closePreview;
-const btnPreviewDownload = $('preview-download');
-if (btnPreviewDownload) btnPreviewDownload.onclick = () => runExport(btnPreviewDownload);
-{
-  const modal = $('preview-modal');
-  if (modal) modal.addEventListener('click', e => { if (e.target === modal) closePreview(); });
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && modal && !modal.hidden) closePreview();
-  });
-}
+  btn.textContent = 'Export video';
+  btn.disabled = false;
+};
 
 function refreshHighlightsSoon() { if (sel.mode === 'svg') requestAnimationFrame(() => sel._renderSVGHighlights()); }
 
@@ -626,66 +553,22 @@ function renderVideoList() {
     vid.play().catch(() => {});
   });
 }
-
-$('motion-input').onchange = async (e) => {
-  const file = e.target.files[0]; if (!file) return;
-
-  // show the clip in the Videos section
-  const videoUrl = URL.createObjectURL(file);
-  const videoRec = addVideoThumb(videoUrl, file.name.replace(/\.[^.]+$/, ''));
-
-  $('upload-status').textContent = 'Analyzing motion…';
-  capture.onProgress = (p, msg) => {
-    $('upload-status').textContent = msg || `Analyzing… ${Math.round(p * 100)}%`;
-  };
-  try {
-    const motion = await capture.captureFromFile(file);
-    if (motion) {
-      // MULTI-MOTION BRANCH: if the service segmented ≥2 distinct motions,
-      // show the picker so the user names and chooses which to save. Each
-      // chosen region becomes its own Motion in the library (the whole-frame
-      // `motion` variable is discarded — its trajectories/params are the
-      // blended average, not what the user wants).
-      if (motion.regions && motion.regions.length >= 2 && window.showMultiPick) {
-        $('upload-status').textContent =
-          `${motion.regions.length} motions detected — pick and name them.`;
-        const picked = await showMultiPick(motion.videoUrl, motion.regions, {
-          engine: motion.engine,
-          framesAnalyzed: motion.framesAnalyzed,
-          fps: motion.trajFps,
-        });
-        if (!picked.length) {
-          // user cancelled or unchecked everything — release the shared
-          // object URL and bail without adding anything
-          URL.revokeObjectURL(motion.videoUrl);
-          $('upload-status').textContent = 'No motions saved.';
-        } else {
-          for (const m of picked) library.add(m);
-          videoRec.motionId = picked[0].id;   // link the clip to its first motion
-          renderMotionList();
-          const names = picked.map(m => `"${m.name}"`).join(', ');
-          $('upload-status').textContent =
-            `Added ${picked.length} motion${picked.length > 1 ? 's' : ''}.`;
-          status(`Added ${picked.length} motion${picked.length > 1 ? 's' : ''} — ${names}. Click one, then apply to an object.`, true);
-        }
-      } else {
-        // SINGLE-MOTION PATH (unchanged): the "wow" extraction moment only
-        // plays when there's really just one motion to celebrate.
-        if (motion.trajectories && motion.videoUrl && window.showExtraction) {
-          await showExtraction(motion.videoUrl, motion.trajectories, motion.params, motion.color);
-        }
-        library.add(motion); videoRec.motionId = motion.id; renderMotionList();
-        $('upload-status').textContent = `Added "${motion.name}"`;
-        status(`Motion "${motion.name}" captured from video — click it, then apply to an object.`, true);
-      }
-    } else {
-      $('upload-status').textContent = 'Could not extract motion (need more movement / a longer clip).';
+// synthetic downward motion field so the extraction moment plays over any
+// falling-leaves clip even without the analysis service running
+function synthFallTrajectories() {
+  const G = 12, F = 20, tracks = [];
+  for (let gy = 0; gy < G; gy++) for (let gx = 0; gx < G; gx++) {
+    const x0 = (gx + 0.5) / G, y0 = (gy + 0.5) / G, seed = gx * 7 + gy * 13;
+    const tr = [];
+    for (let f = 0; f < F; f++) {
+      const p = f / (F - 1);
+      tr.push([x0 + 0.03 * Math.sin(p * 6 + seed), y0 + p * 0.42]);
     }
-  } catch (err) {
-    $('upload-status').textContent = 'Video error: ' + err.message;
+    tracks.push(tr);
   }
-  e.target.value = '';
-};
+  return tracks;
+}
+$('motion-input').onchange = (e) => window.handleMotionUpload(e);
 
 // =========================================================================
 //  Export animated SVG (self-contained: motion baked into CSS keyframes)
@@ -750,9 +633,14 @@ if (rightCollapse) {
 }
 
 renderMotionList();
-loadBlank();
+loadScene('poster');
 
 // expose for automated testing
 window.__ms = { sel, library, animator, loadScene, loadUploadedSVG, loadRasterImage };
+
+// bridge: upload.js is a separate script and can't see these IIFE-local symbols,
+// so hand them across explicitly (it destructures window.__mlUpload at call time).
+window.__mlUpload = { $, status, capture, library, sel, renderMotionList,
+  addVideoThumb, synthFallTrajectories, showInspector, applyMotionToActive };
 
 })();
