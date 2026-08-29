@@ -502,6 +502,68 @@ function buildWaveData(wrap, opts) {
   return paths.length ? { paths, minX, maxX, minY, maxY } : null;
 }
 
+/*
+ * ---- Coordinate-level path warp (tear-free deformation) ----
+ * The polyline resampler above (getPointAtLength → 72 straight chords) flattens béziers
+ * and samples each path independently, so curved, layered art loses fidelity and stacked
+ * shapes' shared edges drift apart into slivers. warpPathD instead moves the path's OWN
+ * coordinates — every anchor AND every bézier control point — through a continuous
+ * displacement `disp(x, y) -> [x2, y2]`, and re-emits the same command structure. Curves
+ * stay curves; a point shared by two paths maps identically, so nothing can tear.
+ * Handles M/L/H/V/C/S/Q/T/A/Z (absolute + relative). Arc radii/flags pass through; only
+ * the arc endpoint is warped (arcs are rare in this art).
+ */
+function warpPathD(d, disp) {
+  const segs = d.match(/[MmLlHhVvCcSsQqTtAaZz][^MmLlHhVvCcSsQqTtAaZz]*/g);
+  if (!segs) return d;
+  let out = '', cx = 0, cy = 0, sx = 0, sy = 0;   // current point, subpath start
+  const P = (x, y) => { const p = disp(x, y); return p[0].toFixed(2) + ',' + p[1].toFixed(2); };
+  for (const seg of segs) {
+    const cmd = seg[0], C = cmd.toUpperCase(), rel = cmd >= 'a' && cmd <= 'z';
+    if (C === 'Z') { out += 'Z'; cx = sx; cy = sy; continue; }
+    const nums = (seg.slice(1).match(/-?\d*\.?\d+(?:[eE][-+]?\d+)?/g) || []).map(Number);
+    let i = 0;
+    if (C === 'M') {
+      let first = true;
+      while (i + 1 < nums.length) {
+        const ax = rel ? cx + nums[i] : nums[i], ay = rel ? cy + nums[i + 1] : nums[i + 1];
+        out += (first ? 'M' : 'L') + P(ax, ay); cx = ax; cy = ay;
+        if (first) { sx = ax; sy = ay; first = false; }
+        i += 2;
+      }
+    } else if (C === 'L') {
+      while (i + 1 < nums.length) { const ax = rel ? cx + nums[i] : nums[i], ay = rel ? cy + nums[i + 1] : nums[i + 1]; out += 'L' + P(ax, ay); cx = ax; cy = ay; i += 2; }
+    } else if (C === 'H') {
+      while (i < nums.length) { const ax = rel ? cx + nums[i] : nums[i]; out += 'L' + P(ax, cy); cx = ax; i += 1; }
+    } else if (C === 'V') {
+      while (i < nums.length) { const ay = rel ? cy + nums[i] : nums[i]; out += 'L' + P(cx, ay); cy = ay; i += 1; }
+    } else if (C === 'C') {
+      while (i + 5 < nums.length) {
+        const x1 = rel ? cx + nums[i] : nums[i], y1 = rel ? cy + nums[i + 1] : nums[i + 1];
+        const x2 = rel ? cx + nums[i + 2] : nums[i + 2], y2 = rel ? cy + nums[i + 3] : nums[i + 3];
+        const ex = rel ? cx + nums[i + 4] : nums[i + 4], ey = rel ? cy + nums[i + 5] : nums[i + 5];
+        out += 'C' + P(x1, y1) + ' ' + P(x2, y2) + ' ' + P(ex, ey); cx = ex; cy = ey; i += 6;
+      }
+    } else if (C === 'S' || C === 'Q') {
+      while (i + 3 < nums.length) {
+        const x1 = rel ? cx + nums[i] : nums[i], y1 = rel ? cy + nums[i + 1] : nums[i + 1];
+        const ex = rel ? cx + nums[i + 2] : nums[i + 2], ey = rel ? cy + nums[i + 3] : nums[i + 3];
+        out += C + P(x1, y1) + ' ' + P(ex, ey); cx = ex; cy = ey; i += 4;
+      }
+    } else if (C === 'T') {
+      while (i + 1 < nums.length) { const ex = rel ? cx + nums[i] : nums[i], ey = rel ? cy + nums[i + 1] : nums[i + 1]; out += 'T' + P(ex, ey); cx = ex; cy = ey; i += 2; }
+    } else if (C === 'A') {
+      while (i + 6 < nums.length) {
+        const ex = rel ? cx + nums[i + 5] : nums[i + 5], ey = rel ? cy + nums[i + 6] : nums[i + 6];
+        const p = disp(ex, ey);
+        out += 'A' + nums[i] + ',' + nums[i + 1] + ' ' + nums[i + 2] + ' ' + nums[i + 3] + ' ' + nums[i + 4] + ' ' + p[0].toFixed(2) + ',' + p[1].toFixed(2);
+        cx = ex; cy = ey; i += 7;
+      }
+    }
+  }
+  return out;
+}
+
 /* Translate a detail (non-resampled) path so it rides the cloth's displacement
  * at its center. Keeps the path's crisp original geometry intact. */
 function detailRide(pd, minX, minY, w, h, field, t, intensity) {

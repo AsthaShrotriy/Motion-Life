@@ -303,59 +303,116 @@ class Animator {
     return w.querySelectorAll('path').length > 14;
   }
 
-  _applyCloth(s, motion, t, intensity) {
-    // COHERENT cloth: a garment drawn as many stacked fills (a skirt/dress with folds,
-    // shading, trim) must deform as ONE sheet, or the fills separate and the background
-    // shows through as gaps. Detail-riding is only right for a FEW crisp emblems on a big
-    // cloth (flag + chakra). Detect the garment case (an explicit data-cloth="coherent"
-    // marker, or simply many paths) and point-sample EVERY path so they share one warp.
-    const coherent = this._clothCoherent(s);
-    if (!s._wave || s._waveCoherent !== coherent) {
-      s._wave = buildWaveData(s.wrap, { sampleAll: coherent });
-      s._waveCoherent = coherent;
+  /* Elegant, curated SKIRT sway. Applying a captured flag/flutter field to a skirt looks
+     wrong — a flag whips from a side pole, a skirt pivots from the WAIST with the hem
+     swinging. This ignores the captured field and drives a smooth waist-pinned pendulum:
+     every point is displaced by a continuous function of its position, so coincident points
+     move identically and the fabric can never tear into gaps. Speed/Intensity still apply
+     (t is already scaled by Speed; intensity scales the swing). Opt in with data-cloth="skirt". */
+  _applySkirt(s, motion, t, intensity) {
+    // Cache the path elements + their pristine geometry + the group box ONCE. We warp the
+    // paths' own coordinates (warpPathD) rather than resampling to polylines, so béziers
+    // stay smooth and stacked shapes that share edges can never split into slivers.
+    if (!s._skirt || s._skirtMotion !== motion.id) {
+      const els = [...s.wrap.querySelectorAll('path')].filter(el => {
+        let d0 = el.getAttribute('data-ms-d0');
+        if (!d0) { d0 = el.getAttribute('d'); if (!d0) return false; el.setAttribute('data-ms-d0', d0); }
+        else el.setAttribute('d', d0);
+        return true;
+      });
+      let bb; try { bb = s.wrap.getBBox(); } catch (_) { bb = { x: 0, y: 0, width: 1, height: 1 }; }
+      s._skirt = { els: els.map(el => ({ el, d0: el.getAttribute('data-ms-d0') })),
+                   minY: bb.y, H: Math.max(1, bb.height), W: Math.max(1, bb.width) };
+      s._skirtMotion = motion.id;
     }
-    if (!s._wave) return false;                     // nothing sampleable to deform
-    const wv = s._wave;
-    const width = Math.max(1, wv.maxX - wv.minX);
-    const height = Math.max(1, wv.maxY - wv.minY);
+    const c = s._skirt;
+    const p = motion.params || {};
+    const f = 0.42 + 0.20 * Math.min(1, Math.max(0, p.frequency || 0.5));   // calm, skirt-like
+    const w = 2 * Math.PI * f;
+    const A = c.W * 0.17 * intensity;                                        // hem swing amplitude
+    const s1 = Math.sin(w * t), lift = A * 0.16 * (1 - Math.cos(w * t)) * 0.5;
+    // continuous displacement of a point by its VERTICAL position: waist (top) pinned,
+    // swing grows toward the hem. A pure function of (x,y) -> shared points move together.
+    const disp = (x, y) => {
+      const v = Math.max(0, Math.min(1, (y - c.minY) / c.H));
+      const taper = Math.pow(v, 1.4);
+      const dx = A * taper * (s1 + 0.22 * Math.sin(1.7 * w * t - v * 3.0));
+      const dy = lift * (v * v);
+      return [x + dx, y + dy];
+    };
+    for (const o of c.els) o.el.setAttribute('d', warpPathD(o.d0, disp));
+    s.wrap.setAttribute('transform', '');
+    return true;
+  }
+
+  /* Cache every <path> in the selection + its pristine geometry (data-ms-d0) and the group
+     box, ONCE per (motion, mode). Shared by the coordinate-warp deformers below. Rebuilt
+     when the key changes; geometry is restored on reset via the same data-ms-d0. */
+  _deformCache(s, key) {
+    if (!s._warp || s._warp.key !== key) {
+      const els = [];
+      for (const el of s.wrap.querySelectorAll('path')) {
+        let d0 = el.getAttribute('data-ms-d0');
+        if (!d0) { d0 = el.getAttribute('d'); if (!d0) continue; el.setAttribute('data-ms-d0', d0); }
+        else el.setAttribute('d', d0);
+        els.push({ el, d0 });
+      }
+      let bb; try { bb = s.wrap.getBBox(); } catch (_) { bb = { x: 0, y: 0, width: 1, height: 1 }; }
+      s._warp = { key, els, box: {
+        minX: bb.x, minY: bb.y, maxX: bb.x + bb.width, maxY: bb.y + bb.height,
+        width: Math.max(1, bb.width), height: Math.max(1, bb.height) } };
+    }
+    return s._warp;
+  }
+
+  /* Warp every cached path's OWN coordinates (anchors + bézier control points) through a
+     continuous displacement `disp(x,y)->[x2,y2]`. Because disp is a pure function of
+     position, béziers stay smooth and any point shared by two paths maps identically —
+     so stacked, curved artwork deforms without faceting or tearing into gaps. */
+  _deformApply(s, disp) {
+    for (const o of s._warp.els) o.el.setAttribute('d', warpPathD(o.d0, disp));
+    s.wrap.setAttribute('transform', '');
+  }
+
+  _applyCloth(s, motion, t, intensity) {
+    // a skirt/dress rigged for the curated waist-pinned sway takes that path instead
+    if (s.wrap.querySelector && s.wrap.querySelector('[data-cloth="skirt"]')) {
+      return this._applySkirt(s, motion, t, intensity);
+    }
+    const c = this._deformCache(s, motion.id + ':cloth');
+    if (!c.els.length) return false;                 // nothing deformable
+    const box = c.box, width = box.width;
     const field = this._fieldFor(s, motion);
 
     if (field) {
+      // ONE shared MLS warp, anchored at the left edge (a flag pinned to its pole),
+      // applied to every path's own coordinates — curves + shared edges preserved.
       if (!s._mesh || s._meshMotion !== motion.id || s._meshAnchor !== 'x0') {
-        s._mesh = buildMeshWarp(field, wv, { anchor: 'x0' });
+        s._mesh = buildMeshWarp(field, box, { anchor: 'x0' });
         s._meshMotion = motion.id;
         s._meshAnchor = 'x0';
       }
       if (s._mesh) {
-        for (const pd of wv.paths) {
-          // fine detail (an emblem): ride the cloth rigidly, keep its geometry crisp.
-          // In coherent mode there are no detail paths (sampleAll), so all deform together.
-          if (pd.detail) detailRideMesh(pd, s._mesh, t, intensity);
-          else pd.el.setAttribute('d', meshD(pd, s._mesh, t, intensity));
-        }
-        s.wrap.setAttribute('transform', '');
+        const warp = s._mesh;
+        this._deformApply(s, (x, y) => { const q = warp(x, y, t, intensity); return [q.x, q.y]; });
         return true;
       }
     }
 
-    // no captured field (preset) → coherent synthetic traveling sine
+    // no captured field (preset) → synthetic traveling sine (same math as waveD)
     const p = motion.params;
     const A = WAVE_AMP_PX * (0.35 + p.amplitude) * intensity;
     const k = 2 * Math.PI * WAVE_CYCLES * (0.5 + p.phaseSpread) / width;
     const phase = 2 * Math.PI * p.frequency * t;
     const turb = p.turbulence * 4 * intensity;
-    for (const pd of wv.paths) {
-      if (pd.detail) {
-        const ramp = Math.pow((pd.cx - wv.minX) / width, 1.15);
-        const arg = phase - k * (pd.cx - wv.minX);
-        const dyv = A * ramp * Math.sin(arg) + turb * ramp * _noise(pd.cx * 0.11 + phase * 1.3);
-        const dxv = A * 0.22 * ramp * Math.cos(arg);
-        pd.el.setAttribute('transform', `translate(${dxv.toFixed(2)} ${dyv.toFixed(2)})`);
-      } else {
-        pd.el.setAttribute('d', waveD(pd, wv.minX, width, A, k, phase, turb));
-      }
-    }
-    s.wrap.setAttribute('transform', '');
+    this._deformApply(s, (x, y) => {
+      const ramp = Math.pow((x - box.minX) / width, 1.15);
+      const arg = phase - k * (x - box.minX);
+      const dy = A * ramp * Math.sin(arg) + A * 0.32 * ramp * Math.sin(arg * 2.0 + 1.3)
+               + turb * ramp * _noise(x * 0.11 + phase * 1.3);
+      const dx = A * 0.22 * ramp * Math.cos(arg);
+      return [x + dx, y + dy];
+    });
     return true;
   }
 
@@ -368,24 +425,25 @@ class Animator {
    * wave, which is what the Water Ripple preset has always used.
    */
   _applyFluid(s, motion, t, intensity) {
-    if (!s._wave) s._wave = buildWaveData(s.wrap);
-    const field = s._wave ? this._fieldFor(s, motion) : null;
+    const field = this._fieldFor(s, motion);
     if (!field) {
-      if (!s._wave) return false;
+      // no captured field → synthetic laminar wave (river). Non-path art has no outline
+      // to flow; return false so the default sway runs, exactly as before.
+      if (!s.wrap.querySelector('path')) return false;
       this._applyRiver(s, motion, t, intensity);
       return true;
     }
+    const c = this._deformCache(s, motion.id + ':fluid');
+    if (!c.els.length) return false;
+    // same mesh warp as cloth but anchor 'none' — a fluid surface is pinned to nothing.
     if (!s._mesh || s._meshMotion !== motion.id || s._meshAnchor !== 'none') {
-      s._mesh = buildMeshWarp(field, s._wave, { anchor: 'none' });
+      s._mesh = buildMeshWarp(field, c.box, { anchor: 'none' });
       s._meshMotion = motion.id;
       s._meshAnchor = 'none';
     }
     if (!s._mesh) return false;
-    for (const pd of s._wave.paths) {
-      if (pd.detail) detailRideMesh(pd, s._mesh, t, intensity);
-      else pd.el.setAttribute('d', meshD(pd, s._mesh, t, intensity));
-    }
-    s.wrap.setAttribute('transform', '');
+    const warp = s._mesh;
+    this._deformApply(s, (x, y) => { const q = warp(x, y, t, intensity); return [q.x, q.y]; });
     return true;
   }
 
@@ -706,57 +764,44 @@ class Animator {
   _applyRiver(s, motion, t, intensity) {
     const wrap = s.wrap;
     if (!s._river) {
-      s._river = buildWaveData(wrap);       // sampled pristine geometry per <path>
+      // cache the path elements + pristine geometry + box (coordinate-warp, tear-free)
+      const els = [];
+      for (const el of wrap.querySelectorAll('path')) {
+        let d0 = el.getAttribute('data-ms-d0');
+        if (!d0) { d0 = el.getAttribute('d'); if (!d0) continue; el.setAttribute('data-ms-d0', d0); }
+        else el.setAttribute('d', d0);
+        els.push({ el, d0 });
+      }
+      let bb; try { bb = wrap.getBBox(); } catch (_) { bb = null; }
+      s._river = { els, box: bb ? { minX: bb.x, minY: bb.y,
+        width: Math.max(1, bb.width), height: Math.max(1, bb.height) } : null };
     }
-    // River art built from non-<path> shapes (rect/polygon/ellipse) has no
-    // sampleable outline to deform — buildWaveData returns null for those.
-    // Fall back to a gentle rigid sway instead of silently doing nothing
-    // (this used to leave the object completely static after a real drop,
-    // even though the drag-preview — which just does a generic transform —
-    // showed movement fine).
-    if (!s._river) {
+    const rv = s._river;
+    // Art built from non-<path> shapes (rect/polygon/ellipse) has no outline to deform —
+    // fall back to a gentle rigid sway instead of silently doing nothing.
+    if (!rv.els.length || !rv.box) {
       const { dx, dy, rot } = computeMotion(motion.params, s.center[0] * 0.01 + s.center[1] * 0.03, t, intensity);
       const [cx, cy] = s.center;
       wrap.setAttribute('transform', `translate(${dx.toFixed(2)} ${dy.toFixed(2)}) rotate(${rot.toFixed(3)} ${cx.toFixed(1)} ${cy.toFixed(1)})`);
       return;
     }
-    const rv = s._river;
-    const width = Math.max(1, rv.maxX - rv.minX);
-    const height = Math.max(1, rv.maxY - rv.minY);
+    const box = rv.box, width = box.width, height = box.height;
     const p = motion.params || {};
-    // laminar tuning: long wavelength (few gentle crests across the width),
-    // slow drift, shallow amplitude. Scale mildly by the preset's amplitude so
-    // the Intensity slider still has a natural effect, but keep it calm.
+    // laminar tuning: long wavelength, slow drift, shallow amplitude (kept verbatim).
     const A = 3.4 * (0.6 + (p.amplitude || 0.2)) * intensity;   // vertical swell (units)
     const k = 2 * Math.PI * 1.15 / width;                       // ~1 crest across the river
     const f = 0.28 * (0.6 + (p.frequency || 1.0) * 0.5);        // slow downstream speed
     const phase = 2 * Math.PI * f * t;
     const flow = 5.0 * intensity;                               // along-stream crest slide
-    for (const pd of rv.paths) {
-      if (pd.detail) {
-        // small detail path (e.g. a rock/highlight) — ride the flow at its
-        // center instead of resampling it (resampling would wreck its geometry)
-        const yPhase = (pd.cy - rv.minY) / height * Math.PI * 1.3;
-        const arg = k * (pd.cx - rv.minX) - phase + yPhase;
-        const dy = A * Math.sin(arg) + A * 0.35 * Math.sin(arg * 0.5 + phase * 0.6);
-        const dx = flow * Math.cos(arg) * 0.5;
-        pd.el.setAttribute('transform', `translate(${dx.toFixed(2)} ${dy.toFixed(2)})`);
-        continue;
-      }
-      let d = '';
-      for (let i = 0; i < pd.pts.length; i++) {
-        const [x0, y0] = pd.pts[i];
-        // per-scanline phase offset → the surface flows downstream, not in lockstep
-        const yPhase = (y0 - rv.minY) / height * Math.PI * 1.3;
-        const arg = k * (x0 - rv.minX) - phase + yPhase;
-        // primary swell + a small, slower second harmonic for organic surface
-        const dy = A * Math.sin(arg) + A * 0.35 * Math.sin(arg * 0.5 + phase * 0.6);
-        // gentle downstream shear so crests glide along the current
-        const dx = flow * Math.cos(arg) * 0.5;
-        d += (i ? 'L' : 'M') + (x0 + dx).toFixed(2) + ',' + (y0 + dy).toFixed(2);
-      }
-      pd.el.setAttribute('d', pd.closed ? d + 'Z' : d);
-    }
+    // continuous laminar displacement — a pure function of (x,y), so shared points align.
+    const disp = (x, y) => {
+      const yPhase = (y - box.minY) / height * Math.PI * 1.3;   // downstream, not lockstep
+      const arg = k * (x - box.minX) - phase + yPhase;
+      const dy = A * Math.sin(arg) + A * 0.35 * Math.sin(arg * 0.5 + phase * 0.6);
+      const dx = flow * Math.cos(arg) * 0.5;
+      return [x + dx, y + dy];
+    };
+    for (const o of rv.els) o.el.setAttribute('d', warpPathD(o.d0, disp));
     wrap.setAttribute('transform', '');
   }
 
@@ -998,6 +1043,8 @@ class Animator {
         el.removeAttribute('transform');
       }
       s._wave = null;
+      s._warp = null;                            // coordinate-warp path cache (cloth/fluid)
+      s._skirt = null; s._skirtMotion = null;   // curated skirt sway (coordinate warp)
       s._river = null;
       s._boat = null;
       s._path = null; s._pathMotion = null;     // Step 5 travel path (room is re-measured)
