@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <script>(function(){var t=localStorage.getItem('ml-theme')||'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
-<link rel="stylesheet" href="css/style.css?v=47">
+<link rel="stylesheet" href="css/style.css?v=63">
 </head>
 <body>
 <header>
@@ -17,7 +17,7 @@
   </div>
   <div class="header-center">
     <div class="scene-tabs">
-      <button class="scene-tab active" data-scene="poster">Poster</button>
+      <button class="scene-tab" data-scene="poster">Poster</button>
       <button class="scene-tab" data-scene="scenery">Scenery</button>
       <button class="scene-tab" data-scene="character">Character</button>
     </div>
@@ -108,8 +108,26 @@
         </div>
       </div>
 
+      <div class="panel-section" id="judge-section" hidden>
+        <h2>Motion judge</h2>
+        <p class="judge-hint">Shows the animated result back to the VLM and tunes the dials
+          toward what it says. Costs a vision call per pass, so it only runs when you press it.</p>
+        <div class="insp-actions">
+          <button id="btn-judge">Judge &amp; tune</button>
+          <button id="btn-judge-revert" hidden>Undo tuning</button>
+        </div>
+        <div id="judge-out"></div>
+      </div>
+
       <div class="panel-section" id="layers-section" hidden>
         <h2>Layers</h2>
+        <p class="judge-hint">Auto-label asks the VLM what each layer of the artwork
+          actually depicts, so extracted motion can be applied by what an object IS
+          rather than by what its layer is called. One vision call per press.</p>
+        <div class="insp-actions">
+          <button id="btn-autolabel">Auto-label layers</button>
+        </div>
+        <div id="autolabel-out"></div>
         <div id="layers-list"></div>
       </div>
     </div>
@@ -122,21 +140,23 @@
 
 <button id="theme-toggle" class="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">☀️</button>
 
-<script src="js/flow.js?v=47"></script>
-<script src="js/distill.js?v=47"></script>
-<script src="js/motions.js?v=47"></script>
-<script src="js/scenery.js?v=47"></script>
-<script src="js/poster.js?v=47"></script>
-<script src="js/regions.js?v=47"></script>
-<script src="js/motionfields.js?v=47"></script>
-<script src="js/animate.js?v=47"></script>
-<script src="js/export.js?v=47"></script>
-<script src="js/videoexport.js?v=47"></script>
-<script src="js/extractviz.js?v=47"></script>
-<script src="js/multipick.js?v=47"></script>
-<script src="js/skeletonviz.js?v=47"></script>
-<script src="js/capture.js?v=47"></script>
-<script src="js/upload.js?v=47"></script>
-<script src="js/main.js?v=47"></script>
+<script src="js/flow.js?v=63"></script>
+<script src="js/distill.js?v=63"></script>
+<script src="js/motions.js?v=63"></script>
+<script src="js/scenery.js?v=63"></script>
+<script src="js/poster.js?v=63"></script>
+<script src="js/regions.js?v=63"></script>
+<script src="js/motionfields.js?v=63"></script>
+<script src="js/animate.js?v=63"></script>
+<script src="js/export.js?v=63"></script>
+<script src="js/videoexport.js?v=63"></script>
+<script src="js/extractviz.js?v=63"></script>
+<script src="js/multipick.js?v=63"></script>
+<script src="js/skeletonviz.js?v=63"></script>
+<script src="js/capture.js?v=63"></script>
+<script src="js/autolabel.js?v=63"></script>
+<script src="js/judge.js?v=63"></script>
+<script src="js/upload.js?v=63"></script>
+<script src="js/main.js?v=63"></script>
 </body>
 </html>

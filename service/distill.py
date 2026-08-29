@@ -178,8 +178,52 @@ def distill(flows: np.ndarray, fps: float, noise_floor: float = 0.55,
     }
 
 
-def grid_trajectories(flows: np.ndarray) -> list:
-    """Integrate mean cell flow into GRID x GRID point tracks (normalized coords)."""
+# (Step 2) a grid cell has to be at least this much object before it is allowed to
+# track. Measured on Autumn.mp4 (SAM 2 mask, 25.6% of frame): 0.20 keeps 36/144 cells
+# — the object plus the one-cell rim its edge falls in. A floor of 0 keeps every
+# background cell (i.e. no masking at all); 0.5 drops the whole rim and, on the thin
+# flag.mp4 mask, drops everything, which is why callers must handle "no cell survived".
+TRACK_CELL_FLOOR = 0.20
+
+
+def cell_coverage(mask: np.ndarray) -> np.ndarray:
+    """[H, W] bool -> [GRID, GRID] fraction of each grid cell the mask covers.
+
+    Same cell decomposition grid_trajectories uses, so a coverage figure and the
+    cell it describes can never drift apart.
+    """
+    H, W = mask.shape[-2], mask.shape[-1]
+    ch, cw = H // GRID, W // GRID
+    m = np.asarray(mask)[: ch * GRID, : cw * GRID].astype(np.float32)
+    return m.reshape(GRID, ch, GRID, cw).mean(axis=(1, 3))
+
+
+def track_cells(mask: np.ndarray, floor: float = TRACK_CELL_FLOOR):
+    """[H, W] bool -> ([GRID, GRID] bool cell mask, kept, total).
+
+    The Step 2 gate: which trajectory cells are allowed to track. Returns the count
+    too, because "24 of 144 cells tracked" is the measurement that shows the mask
+    actually took effect — a caller that only got the boolean array could report
+    masking that never happened.
+    """
+    keep = cell_coverage(mask) >= floor
+    return keep, int(keep.sum()), GRID * GRID
+
+
+def grid_trajectories(flows: np.ndarray, cell_mask: np.ndarray = None) -> list:
+    """Integrate mean cell flow into GRID x GRID point tracks (normalized coords).
+
+    cell_mask: optional [GRID, GRID] bool from track_cells(). Cells that are False
+        are FROZEN at their start position instead of integrating their flow — this
+        is Step 2's "tracking runs only inside the masked object", applied to the
+        motion FIELD and not just to distill()'s scalars.
+
+        Frozen and not dropped, because the field's squareness is load-bearing: the
+        swatch chip reads the grid size back out as sqrt(tracks.length)
+        (js/main.js), and multipick's replay indexes cells by gy*GRID+gx. A frozen
+        cell also reads honestly downstream — zero displacement is exactly the claim
+        "no motion was measured here", where a missing track would be silent.
+    """
     T, _, H, W = flows.shape
     ch, cw = H // GRID, W // GRID
     cells = flows[:, :, : ch * GRID, : cw * GRID].reshape(T, 2, GRID, ch, GRID, cw).mean(axis=(3, 5))
@@ -189,9 +233,11 @@ def grid_trajectories(flows: np.ndarray) -> list:
             x = (gx + 0.5) / GRID
             y = (gy + 0.5) / GRID
             pts, px, py = [[round(x, 4), round(y, 4)]], x, y
+            live = True if cell_mask is None else bool(cell_mask[gy, gx])
             for t in range(T):
-                px += float(cells[t, 0, gy, gx]) / W
-                py += float(cells[t, 1, gy, gx]) / H
+                if live:
+                    px += float(cells[t, 0, gy, gx]) / W
+                    py += float(cells[t, 1, gy, gx]) / H
                 pts.append([round(px, 4), round(py, 4)])
             tracks.append(pts)
     return tracks

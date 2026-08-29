@@ -62,6 +62,9 @@ class H(BaseHTTPRequestHandler):
         motion_id = (q.get("motion_id", [""])[0])
         cls = (q.get("class", [""])[0])
         bbox = _parse_bbox(q.get("bbox", ["0,0,1,1"])[0]) or [0, 0, 1, 1]
+        # ?depth=1 adds Depth Anything V2 facts (needs torch+transformers in THIS venv;
+        # routervenv is OpenCV-only, so the contract just carries a warning there)
+        want_depth = q.get("depth", ["0"])[0] not in ("", "0", "false")
         n = int(self.headers.get("Content-Length", "0"))
         tf = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         remaining = n
@@ -74,11 +77,14 @@ class H(BaseHTTPRequestHandler):
         try:
             print(f"[preprocess] {n//1024} KB clip, motion={motion_id} class={cls} bbox={bbox}",
                   file=sys.stderr)
-            contract, warnings, _ = P.preprocess(tf.name, bbox, motion_id, cls)
+            contract, warnings, _ = P.preprocess(tf.name, bbox, motion_id, cls,
+                                                 want_depth=want_depth)
             cam = contract["camera"]
             cov = (contract["mask"] or {}).get("coverage")
+            dep = contract.get("depth") or {}
             print(f"[preprocess] static_cam={cam['is_static']} residual={cam['residual_px']}px "
-                  f"coverage={cov}", file=sys.stderr)
+                  f"coverage={cov}"
+                  + (f" depth_rank={dep.get('rank')}" if dep else ""), file=sys.stderr)
             self._json(200, contract)
         except Exception as e:
             print(f"[preprocess] error: {e}", file=sys.stderr)

@@ -1,0 +1,54 @@
+# Python
+service/venv/
+**/__pycache__/
+*.pyc
+
+# Node
+**/node_modules/
+
+# OS
+.DS_Store
+**/.DS_Store
+
+# Build / scratch
+build/
+*.log
+demo-export.svg
+
+# Video sources: ignore everywhere EXCEPT the curated demo clips in assets/videos
+*.mp4
+*.mov
+!assets/videos/*.mp4
+!assets/videos/*.mov
+
+# Stray symlinks to sibling/scratch dirs
+comic
+tests/node_modules
+
+# MediaPipe pose venv (created by service/run-pose.sh)
+mpvenv/
+
+# VLM Router venv (created by service/run-router.sh)
+routervenv/
+
+# Local secrets (copy .env.example -> .env)
+.env
+
+# Vendored SEA-RAFT clone (opt-in engine; run service/setup-searaft.sh)
+service/SEA-RAFT/
+
+# Auto-downloaded model weights (YOLO etc.)
+*.pt
+
+# Huge demo recording (keep local, never commit)
+assets/videos/CompleteDemo.mp4
+
+# local key helper (macOS clipboard)
+setkey.sh
+
+# service logs
+logs/
+
+# Vendored upstream clone (EricGuo5513/momask-codes) + its ~2GB checkpoints — Step 6.
+# Upstream source, not ours: keep it out of history so `git add -A` can never sweep it in.
+service/momask-codes/

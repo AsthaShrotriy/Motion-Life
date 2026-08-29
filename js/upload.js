@@ -1,14 +1,15 @@
-/* upload.js — the video-upload pipeline: VLM classify -> route -> extract.
-   Handles character (MediaPipe), multi-motion (bbox-localized per detected motion),
-   the falling-leaves demo, and single-motion RAFT capture. Exposed as
-   window.handleMotionUpload; main.js wires it to the #motion-input change event.
-   References main.js globals (capture, library, sel, $, status, renderMotionList,
-   addVideoThumb, synthFallTrajectories, uploadedVideos) at call time via global scope. */
+/* upload.js — the video-upload pipeline: VLM classify -> route -> extract -> apply.
+   Handles character (MediaPipe), multi-motion (bbox-localized per detected motion), and
+   single-motion RAFT capture. Every path here decides what to do from what the ROUTER
+   saw in the clip; nothing branches on the filename. (Step 10 removed the last one: a
+   /leaf|autumn/ filename test that replaced the extraction with a hand-written fall.)
+   Exposed as window.handleMotionUpload; main.js wires it to the #motion-input change
+   event. main.js is IIFE-wrapped, so its symbols are NOT globals — it hands them across
+   via window.__mlUpload, which we destructure at call time (not load time). */
 window.handleMotionUpload = async (e) => {
   // main.js is a separate IIFE-wrapped script; grab the shared helpers it exposes.
   const { $, status, capture, library, sel, renderMotionList, addVideoThumb,
-          synthFallTrajectories, showInspector, applyMotionToActive } = window.__mlUpload;
-
+          showInspector, applyMotionToActive, autoApplyMotions } = window.__mlUpload;
   const file = e.target.files[0]; if (!file) return;
 
   // show the clip in the Videos section
@@ -66,7 +67,12 @@ window.handleMotionUpload = async (e) => {
     $('upload-status').textContent = 'Extracting body motion with MediaPipe…' +
       (target && !rigged ? ` (${target.name} isn't rigged → whole-body puppet)` : '');
     try {
-      const pose = await capture.captureCharacter(file);
+      // (Step 7) fmt=swatch: one request gives BOTH the unified Contract-B swatch (for the
+      // library) and, nested under .pose, the same {joints,fps,frames,detected,total} the
+      // rig has always consumed. Verified byte-identical on walk-man.mp4; where they differ
+      // it is because fmt=swatch gap-fills frames the detector missed, which the rig wants.
+      const sw = await capture.captureCharacter(file, 'pose', 'swatch');
+      const pose = sw && (sw.pose || sw);          // tolerate a legacy response
       if (!pose || !pose.detected) {
         $('upload-status').textContent = 'No person detected — use a clear, full-body clip.';
         e.target.value = ''; return;
@@ -78,6 +84,7 @@ window.handleMotionUpload = async (e) => {
         pose: { joints: pose.joints, fps: pose.fps, frames: pose.frames.filter(Boolean) },
         params: { frequency: 1, amplitude: 0.2, direction: 0, turbulence: 0, damping: 0, phaseSpread: 0 },
         videoUrl, fromUpload: true, engine: 'mediapipe',
+        swatches: sw && sw.kind === 'skeleton' ? [sw] : [],
       };
       library.add(motion); videoRec.motionId = motion.id; renderMotionList();
       library.select(motion.id);
@@ -95,54 +102,102 @@ window.handleMotionUpload = async (e) => {
     }
     e.target.value = ''; return;
   }
-  // else: TEXTURE — fall through to the leaf/RAFT paths below.
+  // else: TEXTURE — fall through to the RAFT paths below.
 
-  // DEMO: a falling-leaves clip → show the real extraction moment over the
-  // video, but hand back a hand-tuned per-leaf fall that looks best on the art.
-  if (/leaf|leaves|falling|autumn/i.test(file.name)) {
-    const trajectories = synthFallTrajectories();
-    const params = { frequency: 0.42, amplitude: 0.5, direction: 270, turbulence: 0.35,
-                     damping: 0.05, phaseSpread: 0.9, driftX: -0.05, driftY: 0.9, leafFall: true };
-    $('upload-status').textContent = 'Analyzing motion…';
-    try {
-      if (window.showExtraction) await showExtraction(videoUrl, trajectories, params, '#d97a2b');
-    } catch (_) {}
-    const motion = { id: 'captured-fall-' + Date.now(), name: 'Autumn Fall',
-      desc: 'Captured from falling-leaves video', color: '#d97a2b',
-      params, trajectories, trajFps: 30, videoUrl, fromUpload: true, engine: 'raft' };
-    library.add(motion); videoRec.motionId = motion.id; renderMotionList();
-    $('upload-status').textContent = 'Added "Autumn Fall"';
-    status('Motion "Autumn Fall" captured from video — click it, then apply to the leaves.', true);
-    e.target.value = '';
-    return;
-  }
+  /* (Step 10) WHAT USED TO BE HERE, AND WHY IT IS GONE.
+   * A `/leaf|leaves|falling|autumn/i.test(file.name)` branch used to intercept the upload,
+   * play the extraction overlay over the real video, and then hand back trajectories from
+   * `synthFallTrajectories()` — a hand-written spiral — plus eight hand-tuned dials, all
+   * labelled "Captured from falling-leaves video". Nothing about the clip was measured; the
+   * filename alone decided the animation, and the UI claimed otherwise.
+   * A clip of falling leaves now goes down the same route as everything else: the VLM reads
+   * it, the router picks an extractor, and whatever the flow field actually says becomes the
+   * swatch. The hand-tuned leaf look survives ONLY as the `autumn-fall` PRESET in
+   * js/motions.js, where it is presented as a preset and never as an extraction. */
 
   // MULTI-MOTION: the VLM found ≥2 distinct (non-body) motions in ONE clip → extract each
   // into its own swatch, bbox-localized to that motion's region and routed to its own engine.
   const textureMotions = allMotions.filter(m => m.class !== 'articulated').slice(0, 4);
   if (textureMotions.length >= 2) {
-    const added = [];
+    const added = [], failed = [];
     for (let i = 0; i < textureMotions.length; i++) {
       const m = textureMotions[i];
       $('upload-status').textContent = `Multi-motion ${i + 1}/${textureMotions.length}: ${m.label} (${m.class})…`;
-      const rt = await capture.route(m.class, { subject_type: m.subject_type, count: m.count });
-      const opts = { bbox: m.bbox };
-      if (rt && rt.available) {
-        if (rt.kind === 'flow' && rt.engine !== 'raft_small') opts.engine = rt.engine;
-        else if (rt.kind === 'trajectory') opts.tracker = rt.engine;
+      // per-region try/catch: the whole point of this branch is that one clip yields
+      // SEVERAL swatches, so one region whose extractor is down (or whose mask came back
+      // empty) must not throw away the regions that did extract. Failures are counted and
+      // named in the status line rather than swallowed.
+      try {
+        const rt = await capture.route(m.class, { subject_type: m.subject_type, count: m.count });
+        // preprocess:1 → object mask + camera motion, seeded by this motion's bbox
+        // (the mask replaces the rectangular crop, so stats come from the object only)
+        // cls: the VLM's class travels into the Contract-B swatch (Step 7) so Step 8's
+        // applicator can route on it instead of on the layer's name.
+        // depth:1 rides along with the mask — on a multi-motion clip it is the one signal
+        // that says which region is in front of which (rank = fraction of the frame behind
+        // the object), and it costs ~90ms because depth_summary samples 3 frames, not all.
+        const opts = { bbox: m.bbox, preprocess: 1, depth: 1, cls: m.class };
+        if (rt && rt.available) {
+          if (rt.kind === 'flow' && rt.engine !== 'raft_small') opts.engine = rt.engine;
+          else if (rt.kind === 'trajectory') opts.tracker = rt.engine;
+          // deliberately NO path=1 here, unlike the single-motion branch below: the
+          // path backend tracks the LONGEST track in the whole frame and takes no
+          // bbox, so on a multi-motion clip it could return a different object's
+          // travel than the region being extracted.
+        }
+        const sw = await capture.captureFromFile(file, opts);
+        if (sw) {
+          sw.name = m.label || m.class;
+          sw.desc = `${m.class} · ${sw.desc}`;
+          /* The class has to survive the FALLBACK too. `cls` above asks the service to
+             stamp it into the Contract-B swatch, but captureFromFile drops to in-browser
+             Lucas–Kanade whenever that call fails, and the LK result carries params and
+             nothing else — no swatch, so no class for animator._classOf to find. The class
+             is the ROUTER's reading of this region of the clip (Contract A), which is
+             evidence either way, so carry it across explicitly. Without this a region whose
+             extraction fell back was silently refused downstream ("motion has no class")
+             and never landed on an object — measured in tests/step10-e2e.js when one of
+             Autumn.mp4's two regions lost its service call to ERR_NO_BUFFER_SPACE.
+             A swatch that already knows its own class keeps it: _classOf prefers
+             swatches[].class over motion.class. */
+          if (!sw.class) sw.class = m.class || '';
+          added.push(sw);
+        } else failed.push(`${m.label || m.class} (no motion found)`);
+      } catch (err) {
+        console.warn(`[MotionLife] region "${m.label || m.class}" failed:`, err.message);
+        failed.push(`${m.label || m.class} (${err.message})`);
       }
-      const sw = await capture.captureFromFile(file, opts);
-      if (sw) { sw.name = m.label || m.class; sw.desc = `${m.class} · ${sw.desc}`; added.push(sw); }
     }
     if (added.length) {
       added.forEach(sw => library.add(sw));
       videoRec.motionId = added[0].id;
       renderMotionList();
+      const lost = failed.length ? ` · ${failed.length} failed: ${failed.join(', ')}` : '';
       $('upload-status').textContent =
-        `Extracted ${added.length} motions: ${added.map(s => `"${s.name}"`).join(', ')} — click one, then apply to an object.`;
-      status(`Extracted ${added.length} motions from one clip — apply each to its object.`, true);
+        `Extracted ${added.length} motions: ${added.map(s => `"${s.name}"`).join(', ')}${lost} — labelling the artwork…`;
+      // (Step 10) END TO END: the swatches now know their CLASS, so ask the VLM what each
+      // artwork layer depicts and put each swatch on the layer that matches its class. No
+      // filename, no layer-name matching. If the router is down autoApplyMotions returns
+      // nothing applied and we say so — the swatches are still in the library to drag by hand.
+      const res = await autoApplyMotions(added);
+      const nameOfId = new Map(added.map(s => [s.id, s.name]));
+      const hit = (res && res.applied) || [], miss = (res && res.skipped) || [];
+      if (hit.length) {
+        const pairs = hit.map(p => `"${nameOfId.get(p.motionId) || p.motionId}" → ${p.layerLabel || p.layerId}`);
+        $('upload-status').textContent =
+          `Applied ${hit.length}/${added.length}: ${pairs.join(', ')}` +
+          (miss.length ? ` · not placed: ${miss.map(s => `"${nameOfId.get(s.motionId) || s.motionId}" (${s.why})`).join(', ')}` : '') +
+          lost;
+        status(`One clip → ${hit.length} motion${hit.length > 1 ? 's' : ''} applied by what each layer IS, not what it is called.`, true);
+      } else {
+        $('upload-status').textContent =
+          `Extracted ${added.length} motions: ${added.map(s => `"${s.name}"`).join(', ')}${lost} — ` +
+          (res && res.reason ? res.reason + ' ' : '') + 'click one, then apply to an object.';
+        status(`Extracted ${added.length} motions from one clip — apply each to its object.`, true);
+      }
     } else {
-      $('upload-status').textContent = 'Multi-motion extraction found nothing usable.';
+      $('upload-status').textContent = 'Multi-motion extraction found nothing usable.' +
+        (failed.length ? ` (${failed.join(', ')})` : '');
     }
     e.target.value = ''; return;
   }
@@ -151,12 +206,23 @@ window.handleMotionUpload = async (e) => {
   // (cloth->SEA-RAFT, flock->CoTracker3, …). Falls back to raft_small if router is down.
   let routeOpts = {};
   if (routed) {
+    // Step 2: mask the extraction to the detected object (seeded by its bbox) so the
+    // background stops diluting the swatch. Falls back to full-frame if no mask is found.
+    routeOpts.bbox = routed.bbox;
+    routeOpts.preprocess = 1;
+    routeOpts.depth = 1;               // Step 2: relative depth over the mask (3 frames)
+    routeOpts.cls = routed.class;      // (Step 7) carried into the swatch for Step 8
     const rt = await capture.route(routed.class, { subject_type: routed.subject_type, count: routed.count });
     if (rt && rt.engine && rt.available) {
       if (rt.kind === 'flow' && rt.engine !== 'raft_small') routeOpts.engine = rt.engine;
       else if (rt.kind === 'trajectory') routeOpts.tracker = rt.engine;
-      // object_path / skeleton engines aren't applied by the texture path yet -> default raft
-      const via = routeOpts.engine || routeOpts.tracker || 'raft_small';
+      // (Step 5) ONE object travelling across the scene → also ask for its travel path,
+      // which animate.js applies via _applyPathTravel. The flow/trajectory extraction
+      // still runs: the path moves the object, the field supplies its internal motion.
+      else if (rt.kind === 'object_path') routeOpts.path = 1;
+      // name BOTH when a path is requested — raft_small still extracts the field
+      const via = routeOpts.engine || routeOpts.tracker
+        || (routeOpts.path ? `${rt.engine} + raft_small` : 'raft_small');
       $('upload-status').textContent = `VLM: ${routed.class} → routing to ${via}…`;
       console.log(`[MotionLife] VLM: ${routed.label} → class=${routed.class} `
         + `subject=${routed.subject_type} count=${routed.count} → extractor=${via} (${rt.kind}); ${rt.reason}`);
@@ -204,6 +270,10 @@ window.handleMotionUpload = async (e) => {
         if (motion.trajectories && motion.videoUrl && window.showExtraction) {
           await showExtraction(motion.videoUrl, motion.trajectories, motion.params, motion.color);
         }
+        // same fallback gap as the multi-motion branch above: keep the router's class when
+        // the extraction dropped to Lucas–Kanade, so Step 8 still dispatches on the class
+        // rather than on the layer the user happens to click.
+        if (routed && routed.class && !motion.class) motion.class = routed.class;
         library.add(motion); videoRec.motionId = motion.id; renderMotionList();
         $('upload-status').textContent = `Added "${motion.name}"`;
         status(`Motion "${motion.name}" captured from video — click it, then apply to an object.`, true);

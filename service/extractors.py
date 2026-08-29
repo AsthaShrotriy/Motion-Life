@@ -246,7 +246,12 @@ def _yolo_build():
         for t in range(len(frames)):
             bgr = np.ascontiguousarray((frames[t][:, :, ::-1] * 255).astype(np.uint8))  # RGB->BGR uint8
             r = model.track(bgr, tracker="bytetrack.yaml", persist=(t > 0), verbose=False,
-                            device=dev, conf=float(os.environ.get("YOLO_CONF", "0.25")))[0]  # t==0 resets tracker
+                            # 0.15, not ultralytics' 0.25: a small distant object drops below
+                            # 0.25 for a few frames and ByteTrack assigns a NEW id, so the
+                            # "longest track" becomes a fragment. Measured on boat.mp4 (200
+                            # frames): 0.25 -> 4 boat tracks, longest 21 frames (10%);
+                            # 0.15 -> 1 track, 88 frames (44%). No new spurious tracks appeared.
+                            device=dev, conf=float(os.environ.get("YOLO_CONF", "0.15")))[0]  # t==0 resets tracker
             b = r.boxes
             if b is None or b.id is None:
                 continue
@@ -265,7 +270,7 @@ register(Engine("yolo_bytetrack", OBJECT_PATH,
                 "YOLO + ByteTrack — detect+track one object into a travel path (boat/car/…)",
                 probe=lambda: (True, "ultralytics+torch (yolov8n.pt auto-downloads once)")
                               if (_has("ultralytics") and _has("torch")) else (False, "pip install ultralytics"),
-                factory=_yolo_build))
+                factory=_yolo_build, default=True))     # only real OBJECT_PATH engine
 
 
 # ── SKELETON: torchvision Keypoint R-CNN (multi-person, RUN-HERE — weights ~226MB on 1st use) ──
@@ -341,12 +346,57 @@ for _n, _k, _desc, _need, _setup in [
     ("mmpose_animal", SKELETON,   "MMPose/DeepLabCut — animal skeletons",           ("mmpose", "mmcv"), "pip install mmpose mmcv + an animal-pose checkpoint"),
     ("tapir",        TRAJECTORY,  "TAPIR/TAP-Net — point tracking (CoTracker alt)", ("tapnet",),      "clone google-deepmind/tapnet + weights"),
     ("objectron",    OBJECT_PATH, "MediaPipe Objectron — 3D box (shoe/chair/cup/camera only)", ("mediapipe",), "install mediapipe (py<=3.12); only 4 categories"),
-    ("mdm",          TEXT2MOTION, "MDM/MotionGPT — text prompt -> skeleton (no video)", ("mdm",),     "clone GuyTevet/motion-diffusion-model + weights"),
     ("droid_slam",   CAMERA,      "DROID-SLAM — camera pose (vs OpenCV homography floor)", ("droid_slam",), "clone princeton-vl/DROID-SLAM (CUDA); floor = ORB affine"),
-    ("sam2",         SEGMENT,     "SAM 2 — clean object mask (vs GrabCut floor)",   ("sam2",),        "pip install 'git+…/sam2' + checkpoint; floor = GrabCut+motion"),
-    ("depth",        DEPTH,       "Depth Anything V2 — monocular depth",            ("transformers",), "pip install transformers + depth-anything weights"),
 ]:
     register(Engine(_n, _k, _desc, probe=_gate(_setup, *_need), factory=_stub(_setup)))
+
+
+# ── TEXT2MOTION: MoMask — text prompt -> skeleton, no video (Step 6) ──────────
+# This row used to read "MDM/MotionGPT … clone GuyTevet/motion-diffusion-model", which
+# was wrong twice over: what is vendored is EricGuo5513/momask-codes, and it was a _stub
+# whose probe could only ever say "not set up" without saying WHAT was missing. It is now
+# a real engine over service/t2m.py: the probe names the specific absent file or module,
+# and the factory hands back an actual generator. It reports False in this checkout (no
+# checkpoints, no CLIP), so resolve_best routes past it to MediaPipe/Keypoint R-CNN —
+# fall back rather than crash, and never fabricate.
+register(Engine("momask", TEXT2MOTION,
+                "MoMask (EricGuo5513/momask-codes) — text prompt -> SMPL-22 skeleton, no video",
+                probe=lambda: __import__("t2m").available(),
+                factory=lambda: __import__("t2m").generate))
+
+# An ALIAS, not a rename: `?engine=mdm` predates this retarget, so the old name keeps
+# resolving instead of silently falling through to the class floor. It is a second Engine
+# rather than an entry in an alias map because resolve_best() SKIPS names that are not in
+# REGISTRY — an alias map would make a stale routing row disappear without a word.
+register(Engine("mdm", TEXT2MOTION,
+                "alias of `momask` — the old MDM/MotionGPT name, kept so `?engine=mdm` still resolves",
+                probe=lambda: __import__("t2m").available(),
+                factory=lambda: __import__("t2m").generate))
+
+
+# ── SEGMENT: SAM 2 box-prompted object mask — real engine, see service/sam2_seg.py ──
+def _sam2_build():
+    import sam2_seg
+    return sam2_seg.box_mask             # (frame_bgr, (x,y,w,h)) -> (mask uint8, iou)
+
+
+register(Engine("sam2", SEGMENT, "SAM 2.1 hiera-tiny — box-prompted object mask (MPS)",
+                probe=lambda: __import__("sam2_seg").available() if _has("sam2")
+                              else (False, "pip install 'git+https://github.com/"
+                                           "facebookresearch/sam2.git'; floor = GrabCut+motion"),
+                factory=_sam2_build, default=True))
+
+
+# ── DEPTH: Depth Anything V2 (Small, apache-2.0) — real engine, see service/depth.py ──
+def _depth_build():
+    import depth as D
+    return D.depth_summary          # (frames_bgr, mask_bool) -> compact depth facts
+
+
+register(Engine("depth", DEPTH, "Depth Anything V2 Small — monocular relative depth (MPS)",
+                probe=lambda: __import__("depth").available() if _has("transformers")
+                              else (False, "pip install transformers (Depth Anything V2)"),
+                factory=_depth_build, default=True))
 
 
 # ── Routing table: (class, subject_type, count, has_text_prompt) -> engine preference ──
@@ -355,10 +405,13 @@ for _n, _k, _desc, _need, _setup in [
 # equals the given attr. Rules are most-specific-first.
 ROUTING_TABLE = {
     "articulated": [
-        ({"subject_type": "human", "has_text_prompt": True}, ["mdm", "wham", "pose_mediapipe", "keypointrcnn"]),
+        ({"subject_type": "human", "has_text_prompt": True}, ["momask", "wham", "pose_mediapipe", "keypointrcnn"]),
         ({"subject_type": "human", "count": "many"},         ["keypointrcnn", "pose_mediapipe"]),
         ({"subject_type": "human"},                          ["wham", "pose_mediapipe", "keypointrcnn"]),
-        ({"subject_type": "animal", "has_text_prompt": True},["mdm", "mmpose_animal", "pose_mediapipe", "keypointrcnn"]),
+        # No text2motion engine on the animal rows. MoMask is trained on HumanML3D — human
+        # motion only — so "a cat stretches" would come back as a person doing something
+        # roughly cat-shaped. The old row listed `mdm` here, which had the same problem.
+        ({"subject_type": "animal", "has_text_prompt": True},["mmpose_animal", "pose_mediapipe", "keypointrcnn"]),
         ({"subject_type": "animal"},                         ["mmpose_animal", "pose_mediapipe", "keypointrcnn"]),
         ({},                                                 ["pose_mediapipe", "keypointrcnn"]),
     ],

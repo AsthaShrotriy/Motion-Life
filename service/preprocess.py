@@ -6,14 +6,18 @@ Given a clip + one Contract-A motion bbox, produce a region_preprocess contract:
              with the camera") before extracting object motion.
   * mask   : a clean object mask (RLE) gated to actually-moving pixels inside the bbox,
              so downstream extraction "runs only inside the masked object".
-  * depth  : optional — SAM 2 (better mask) and Depth Anything V2 (depth) are gated
-             upgrades behind checkpoints; the download-free default here is OpenCV only.
+  * depth  : optional (want_depth=True) — Depth Anything V2 via service/depth.py.
 
-Pure OpenCV + numpy, no torch, no model downloads. Runs CPU-only (routervenv, py3.9).
+Camera + motion gating are pure OpenCV + numpy, so this module imports and runs with no
+torch and no downloads (routervenv, py3.9, CPU). Two upgrades are used WHEN IMPORTABLE
+and fall back silently otherwise, with the mask's `method`/`engine` naming whichever ran:
+  * SAM 2 (service/sam2_seg.py) replaces GrabCut as the segmentation term;
+  * Depth Anything V2 (service/depth.py) fills the depth field.
+
 Algorithm (all real cv2): ORB+RANSAC affine per frame pair, estimated from BACKGROUND
 features only (outside the seed bbox), falling back to identity/static when there
 aren't enough reliable background features; Farneback dense flow minus the
-camera-induced flow = residual (true object) motion; GrabCut(bbox) ∩ motion-gate ∩
+camera-induced flow = residual (true object) motion; SAM 2 (or GrabCut) ∩ motion-gate ∩
 bbox, cleaned by morphology + largest connected component.
 """
 import os
@@ -32,6 +36,8 @@ STATIC_PX = float(os.environ.get("PREP_STATIC_PX", "3.0")) # median corner drift
 MOTION_PCT = float(os.environ.get("PREP_MOTION_PCT", "70"))    # motion percentile inside bbox
 MOTION_FLOOR = float(os.environ.get("PREP_MOTION_FLOOR", "0.6"))  # px/frame min (RAFT-noise floor)
 DRIFT_CAP = float(os.environ.get("PREP_DRIFT_CAP", "0.25"))  # reject pair if corner drift > this*width
+SEG_FLOOR = float(os.environ.get("PREP_SEG_FLOOR", "0.01"))  # finished mask must cover this
+#   fraction of the seed box, else the other segmentation engine is tried (see _build_mask)
 ENGINE = "farneback+affine"
 
 
@@ -141,19 +147,44 @@ def _largest_cc(mask):
     return np.where(lbl == big, 255, 0).astype(np.uint8)
 
 
-def _build_mask(frame, box, motion_energy):
-    """GrabCut(bbox) ∩ motion-gate ∩ bbox, cleaned. Returns (uint8 {0,255}, method).
+def _finish_mask(seg_mask, motion_energy, box, hw):
+    """seg ∩ motion-gate ∩ bbox, then morphology + largest connected component.
 
-    method is "grabcut+motion" normally, or "bbox_motion_fallback" when GrabCut
-    couldn't run (full-frame/degenerate bbox) so the mask is only motion-gated inside
-    the box — the caller surfaces this as a warning so a rectangle is never advertised
-    as a segmented object mask.
+    Shared by the SAM 2 and GrabCut paths so the two can't diverge: the motion gate is
+    what makes the mask select actually-MOVING pixels (Step 2's done-when), and the box
+    intersect keeps the router's seed authoritative. Returns uint8 {0,255}.
+    """
+    h, w = hw
+    x, y, bw, bh = box
+    roi = motion_energy[y:y + bh, x:x + bw]
+    thr = max(MOTION_FLOOR, float(np.percentile(roi, MOTION_PCT)) if roi.size else MOTION_FLOOR)
+    motion = (motion_energy > thr).astype(np.uint8) * 255
+    box_mask = np.zeros((h, w), np.uint8)
+    box_mask[y:y + bh, x:x + bw] = 255
+    final = cv2.bitwise_and(cv2.bitwise_and(seg_mask, motion), box_mask)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    final = cv2.morphologyEx(final, cv2.MORPH_OPEN, k)
+    final = cv2.morphologyEx(final, cv2.MORPH_CLOSE, k)
+    return _largest_cc(final)
+
+
+def _seg_grabcut(frame, box):
+    """GrabCut foreground for a seed box. Returns (uint8 {0,255}, ok).
+
+    ok=False means GrabCut couldn't run at all on this rect and the mask is the plain
+    rectangle, so the caller must not advertise it as a segmentation.
+
+    GrabCut needs a rect strictly inside the frame with SOME background outside it. If
+    the seed bbox fills (or nearly fills) the frame, inset a margin so background samples
+    exist; if that leaves nothing usable, hand back the rectangle.
+
+    Caveat measured on this box (OpenCV 5.0): grabCut is NOT deterministic on an
+    ill-conditioned rect — the identical call on the same array returned 458, 458, then
+    10 foreground px. It is stable on well-conditioned object boxes (11705/11704/11705).
+    That instability is one reason SAM 2 is preferred when available.
     """
     h, w = frame.shape[:2]
     x, y, bw, bh = box
-    # GrabCut needs a rect strictly inside the frame with SOME background outside it.
-    # If the seed bbox fills (or nearly fills) the frame, inset a margin so background
-    # samples exist; if that leaves nothing usable, fall back to the motion-gated box.
     m = max(2, int(round(0.03 * min(w, h))))
     rx, ry = max(0, x), max(0, y)
     rw = min(bw, w - rx - 1)
@@ -162,31 +193,74 @@ def _build_mask(frame, box, motion_energy):
         rx += m; rw -= 2 * m
     if ry <= m and rh >= h - 2 * m:            # spans full height -> inset
         ry += m; rh -= 2 * m
-    gc_ok = rw >= 2 and rh >= 2 and rx + rw < w and ry + rh < h
-    method = "grabcut+motion"
-    gc_mask = np.zeros((h, w), np.uint8)
-    if gc_ok:
+    out = np.zeros((h, w), np.uint8)
+    if rw >= 2 and rh >= 2 and rx + rw < w and ry + rh < h:
         gc = np.zeros((h, w), np.uint8)
-        bgd = np.zeros((1, 65), np.float64)
-        fgd = np.zeros((1, 65), np.float64)
         try:
-            cv2.grabCut(frame, gc, (rx, ry, rw, rh), bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
-            gc_mask = np.where((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+            cv2.grabCut(frame, gc, (rx, ry, rw, rh), np.zeros((1, 65), np.float64),
+                        np.zeros((1, 65), np.float64), 5, cv2.GC_INIT_WITH_RECT)
+            return np.where((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD), 255, 0).astype(np.uint8), True
         except cv2.error:
-            gc_ok = False
-    if not gc_ok:
-        method = "bbox_motion_fallback"
-        gc_mask[y:y + bh, x:x + bw] = 255
-    roi = motion_energy[y:y + bh, x:x + bw]
-    thr = max(MOTION_FLOOR, float(np.percentile(roi, MOTION_PCT)) if roi.size else MOTION_FLOOR)
-    motion = (motion_energy > thr).astype(np.uint8) * 255
-    box_mask = np.zeros((h, w), np.uint8)
-    box_mask[y:y + bh, x:x + bw] = 255
-    final = cv2.bitwise_and(cv2.bitwise_and(gc_mask, motion), box_mask)
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    final = cv2.morphologyEx(final, cv2.MORPH_OPEN, k)
-    final = cv2.morphologyEx(final, cv2.MORPH_CLOSE, k)
-    return _largest_cc(final), method
+            pass
+    out[y:y + bh, x:x + bw] = 255
+    return out, False
+
+
+def _build_mask(frame, box, motion_energy, warnings=None):
+    """segment(bbox) ∩ motion-gate ∩ bbox, cleaned. Returns (uint8 {0,255}, method).
+
+    SAM 2 (service/sam2_seg.py) is the preferred segmentation term; GrabCut is the
+    fallback AND the rescue when SAM 2's finished mask lands below SEG_FLOOR of the seed
+    box. Whichever survives, the larger finished mask wins, so a bad seed box can't leave
+    the pipeline with a near-empty mask. Methods: "sam2+motion", "grabcut+motion", or
+    "bbox_motion_fallback" (a motion-gated rectangle, surfaced as a warning by the caller
+    so a rectangle is never advertised as a segmented object mask).
+
+    Why SAM 2 is preferred, measured on 4 clips with YOLO/hand seed boxes as
+    finished-mask fraction of the seed box (SAM 2 vs GrabCut):
+        flag 0.221/0.221 · walk-man 0.124/0.074 · boat 0.174/0.192 · smoke 0.196/0.164
+    A wash on flag, clearly better on walk-man and smoke, slightly worse on boat — but
+    SAM 2 never degenerated to 0 while GrabCut did on ill-conditioned boxes, and GrabCut
+    is non-deterministic there (see _seg_grabcut). Mask quality is dominated by SEED BOX
+    quality, not by the engine: the same clip with a box cutting the flag in half drops
+    SAM 2 to 58 px, which is exactly what the SEG_FLOOR rescue below catches.
+
+    Deliberately ONE representative frame per engine. Unioning K frames scores higher
+    (flag 0.246, walk-man 0.207) but provably leaks background for a TRANSLATING object —
+    the union of a walking man at 3 frames includes the pavement he crossed — and a
+    majority vote instead collapses GrabCut to 0 on walk-man and boat.
+    """
+    h, w = frame.shape[:2]
+    x, y, bw, bh = box
+    floor_px = max(16, int(SEG_FLOOR * bw * bh))
+    cands = []                                     # (finished mask, method, px)
+
+    try:
+        import sam2_seg                            # optional: torch-free venvs skip this
+        ok, why = sam2_seg.available()
+        if ok:
+            sam_mask, score = sam2_seg.box_mask(frame, (x, y, bw, bh))
+            fin = _finish_mask(sam_mask, motion_energy, box, (h, w))
+            cands.append((fin, "sam2+motion", int((fin > 0).sum())))
+        elif warnings is not None and "pip install" not in why:
+            warnings.append(f"SAM 2 unavailable ({why}); used GrabCut")
+    except Exception as ex:
+        if warnings is not None:
+            warnings.append(f"SAM 2 failed ({type(ex).__name__}: {ex}); used GrabCut")
+
+    if cands and cands[0][2] >= floor_px:
+        return cands[0][0], cands[0][1]            # SAM 2 mask is usable — done
+
+    gc_mask, gc_ok = _seg_grabcut(frame, box)
+    fin = _finish_mask(gc_mask, motion_energy, box, (h, w))
+    cands.append((fin, "grabcut+motion" if gc_ok else "bbox_motion_fallback",
+                  int((fin > 0).sum())))
+    best = max(cands, key=lambda c: c[2])
+    if len(cands) > 1 and warnings is not None:
+        warnings.append(
+            f"SAM 2's mask covered only {cands[0][2]} px of the seed box "
+            f"(<{floor_px}); used {best[1].split('+')[0]} instead")
+    return best[0], best[1]
 
 
 # ── mask RLE codec (row-major, background-first: first run is a count of 0s) ──
@@ -230,11 +304,16 @@ def overlay(frame, mask, box):
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
-def preprocess(path, bbox_norm, motion_id="", cls=""):
+def preprocess(path, bbox_norm, motion_id="", cls="", want_depth=False):
     """Returns (region_preprocess_contract, warnings, viz).
 
     viz = {"frame": rep_bgr, "mask": uint8, "box": (x,y,bw,bh)} for the CLI overlay
     (the server ignores it).
+
+    want_depth: fill contract["depth"] via Depth Anything V2 (service/depth.py). OFF by
+    default because it pulls in torch+transformers and costs a ~0.5-5s cold start, which
+    the OpenCV-only default (routervenv, py3.9) must not depend on. When it's requested
+    but unavailable the contract keeps depth=None and gains a warning — never a fake zero.
     """
     frames, clip = read_frames(path)
     if len(frames) < 2:
@@ -305,7 +384,7 @@ def preprocess(path, bbox_norm, motion_id="", cls=""):
     }
 
     rep = frames[len(frames) // 2]
-    mask, mask_method = _build_mask(rep, (x, y, bw, bh), motion_energy)
+    mask, mask_method = _build_mask(rep, (x, y, bw, bh), motion_energy, warnings)
     if mask_method == "bbox_motion_fallback":
         warnings.append("GrabCut unavailable for this bbox (near full-frame/degenerate); "
                         "mask is motion-gated bounding box only, not a segmented object")
@@ -326,10 +405,26 @@ def preprocess(path, bbox_norm, motion_id="", cls=""):
         "method": mask_method,
     }
 
+    # engine string names what ACTUALLY ran, so a consumer can tell a SAM 2 mask from a
+    # GrabCut one without parsing method strings
+    depth_obj = None
+    engine = ENGINE.replace("farneback", "sam2+farneback") if mask_method == "sam2+motion" else ENGINE
+    if want_depth:
+        try:
+            import depth as DEPTH                      # lazy: torch/transformers only here
+            ok, why = DEPTH.available()
+            if not ok:
+                warnings.append(f"depth requested but unavailable: {why}")
+            else:
+                depth_obj = DEPTH.depth_summary(frames, mask > 0)
+                engine = f"{engine}+{DEPTH.ENGINE}"   # append, so a sam2+ prefix survives
+        except Exception as ex:
+            warnings.append(f"depth failed ({type(ex).__name__}: {ex}); mask/camera unaffected")
+
     raw = {
         "motion_id": motion_id, "class": cls, "seed_bbox": bx,
-        "mask": mask_obj, "camera": camera, "depth": None,
-        "engine": ENGINE, "warnings": warnings,
+        "mask": mask_obj, "camera": camera, "depth": depth_obj,
+        "engine": engine, "warnings": warnings,
     }
     contract, warns = contracts.normalize_region_preprocess(raw, clip)
     return contract, warns, {"frame": rep, "mask": mask, "box": (x, y, bw, bh)}

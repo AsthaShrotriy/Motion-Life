@@ -203,32 +203,12 @@ def _region_bbox(mask: np.ndarray) -> dict:
     }
 
 
-def _region_trajectories(flows: np.ndarray, cell_mask: np.ndarray) -> list:
-    """Trajectories for a single region: cells inside the mask move via their
-    own flow; cells outside the mask are frozen at their start position (so
-    frontend field-replay stays confined to the region).
-    """
-    T, _, H, W = flows.shape
-    ch, cw = H // GRID, W // GRID
-    cells = flows[:, :, : ch * GRID, : cw * GRID].reshape(
-        T, 2, GRID, ch, GRID, cw).mean(axis=(3, 5))
-    tracks = []
-    for gy in range(GRID):
-        for gx in range(GRID):
-            x = (gx + 0.5) / GRID
-            y = (gy + 0.5) / GRID
-            pts = [[round(x, 4), round(y, 4)]]
-            if cell_mask[gy, gx]:
-                px, py = x, y
-                for t in range(T):
-                    px += float(cells[t, 0, gy, gx]) / W
-                    py += float(cells[t, 1, gy, gx]) / H
-                    pts.append([round(px, 4), round(py, 4)])
-            else:
-                for _ in range(T):
-                    pts.append([round(x, 4), round(y, 4)])
-            tracks.append(pts)
-    return tracks
+# Trajectories for a single region — cells inside the region move via their own
+# flow, cells outside are frozen at their start position so frontend field-replay
+# stays confined to the region. This used to be a private copy of the loop; Step 2
+# needed the identical policy for the object mask, so grid_trajectories(cell_mask=)
+# now owns it and there is one freeze rule instead of two that can drift.
+_region_trajectories = grid_trajectories
 
 
 # stable palette used to color regions in the picker UI. Order mirrors what

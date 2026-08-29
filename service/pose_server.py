@@ -8,6 +8,9 @@ POST /extract              raw video bytes in the body
                             viewpoint + gap-filled frames + confidence).
   ?kind=hands            -> MediaPipe Hands (0..2 hands x 21 landmarks) skeleton swatch.
   ?kind=face             -> MediaPipe FaceMesh (468 landmarks) skeleton swatch.
+  ?fmt=swatch            -> (Step 7) any of the above nested in the UNIFIED Contract-B
+                            swatch, so a skeleton validates against the same
+                            contracts.validate_swatch() as a texture or a path.
 GET /  health -> {ok, engine, kinds:[...]}
 
 Hands/face landmarks have NO usable visibility, so they emit [x,y,z] (z = relative
@@ -258,7 +261,7 @@ class H(BaseHTTPRequestHandler):
         tf.close()
         try:
             print(f"[pose] kind={kind} fmt={fmt} from {n//1024} KB clip…", file=sys.stderr)
-            if kind == "pose" and fmt != "b":
+            if kind == "pose" and fmt not in ("b", "swatch"):
                 out = extract(tf.name)             # UNTOUCHED byte-frozen legacy path
             elif kind == "pose":
                 out = extract_pose_b(tf.name)
@@ -271,6 +274,19 @@ class H(BaseHTTPRequestHandler):
             print(f"[pose] detected {out['detected']}/{out['total']} frames"
                   + (f" viewpoint={out.get('viewpoint')}" if 'viewpoint' in out else ""),
                   file=sys.stderr)
+            # (Step 7) fmt=swatch nests the skeleton payload in the UNIFIED Contract-B
+            # swatch, so pose/hands/face validate against the same validate_swatch() as a
+            # texture or a path swatch. fmt=legacy and fmt=b are untouched — the character
+            # rig in js/ still reads fmt=legacy byte-for-byte.
+            if fmt == "swatch" and out.get("kind") == "skeleton":
+                out = contracts.skeleton_swatch(out, cls="articulated",
+                                                engine=out.get("engine", ""))
+                ok, errs = contracts.validate_swatch(out)
+                if not ok:      # our own bug — report it in the payload, don't hide it
+                    out["warnings"] = out["warnings"] + [
+                        "swatch failed validation: " + "; ".join(errs)]
+                    print("[pose] SWATCH VALIDATION FAILED: " + "; ".join(errs),
+                          file=sys.stderr)
             self._json(200, out)
         except Exception as e:
             print(f"[pose] error: {e}", file=sys.stderr)

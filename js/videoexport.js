@@ -39,6 +39,11 @@ async function svgToImage(svgNode) {
   }
 }
 
+// Shared with js/judge.js (Step 9), which needs the same "serialize the LIVE svg,
+// transforms and all" primitive to grab frames for the judge. Exported rather than
+// copied so there is one definition of what a captured frame is.
+window.svgToImage = svgToImage;
+
 window.exportVideo = async function exportVideo(sel, animator, opts = {}) {
   const seconds = opts.seconds || 8;
   const mode = opts.mode || 'reel';

@@ -82,10 +82,10 @@ button {
 button { box-shadow: var(--shadow-sm); }
 button:hover { background: var(--btn-hover); border-color: var(--btn-hover-edge); }
 button:disabled { opacity: 0.4; cursor: default; }
+.subtle-btn { background: transparent; border-color: var(--panel-edge); color: var(--muted); }
 .play-btn { background: var(--accent); border-color: transparent; font-weight: 600; }
 .play-btn:hover { background: #7d6fff; }
 .play-btn.playing { background: var(--accent-2); }
-.subtle-btn { background: transparent; border-color: var(--panel-edge); color: var(--muted); }
 .upload-btn {
   width: 100%; margin-top: 10px;
   border: 1px dashed var(--panel-edge); background: transparent; color: var(--muted);
@@ -209,6 +209,14 @@ main.right-collapsed #right-panel { overflow: visible; }
 .layer-eye:hover { color: var(--text); }
 .layer-eye.off { opacity: 0.3; }
 .layer-name { overflow: hidden; text-overflow: ellipsis; }
+/* (Step 10) what the VLM read off the artwork, beside the file's own layer name */
+.layer-class {
+  margin-left: auto; flex: 0 0 auto; font-size: 10px; letter-spacing: 0.2px;
+  padding: 1px 6px; border-radius: 8px; max-width: 46%;
+  overflow: hidden; text-overflow: ellipsis;
+  background: rgba(110,92,255,0.18); color: var(--accent);
+}
+.layer-class.static { background: var(--surface); color: var(--muted); }
 
 /* ---- left panel sections ---- */
 .panel-divider { height: 1px; background: var(--panel-edge); margin: 16px 0; }
@@ -217,7 +225,7 @@ main.right-collapsed #right-panel { overflow: visible; }
 /* ---- motion chips: Pantone-style particle swatches ---- */
 .chip-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-content: start; }
 .motion-chip {
-  cursor: pointer;
+  cursor: grab;
   border: 1px solid transparent;
   border-radius: 12px;
   overflow: hidden;
@@ -225,6 +233,7 @@ main.right-collapsed #right-panel { overflow: visible; }
   box-shadow: var(--shadow-sm);
   transition: transform 0.12s, box-shadow 0.15s;
 }
+.motion-chip:active { cursor: grabbing; }
 .motion-chip:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(20,20,40,0.18); }
 .motion-chip.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,92,255,0.25); }
 .motion-chip canvas { width: 100%; aspect-ratio: 1; display: block; }
@@ -501,6 +510,38 @@ main.right-collapsed #right-panel { overflow: visible; }
 }
 .motion-badge.assigned { color: var(--accent); border-color: var(--accent); }
 .insp-actions { display: flex; gap: 6px; margin-top: 14px; }
+
+/* ---- motion judge (Step 9) ---- */
+.judge-hint { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin: 0 0 4px; }
+#judge-out { margin-top: 12px; }
+.judge-busy, .judge-err { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.judge-err { color: var(--accent-2); }
+
+.judge-score { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.judge-score strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.judge-score span {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  padding: 2px 6px; border-radius: 4px; background: var(--panel-edge); color: var(--muted);
+}
+.judge-score em { font-size: 10.5px; color: var(--muted); font-style: normal; margin-left: auto; }
+.judge-score.good strong { color: var(--good); }
+.judge-score.mid  strong { color: var(--warn); }
+.judge-score.bad  strong { color: var(--accent-2); }
+
+.judge-critique { font-size: 12.5px; line-height: 1.5; margin: 0 0 10px; }
+
+.judge-axes { display: grid; gap: 4px; margin-bottom: 10px; }
+.judge-axis { display: grid; grid-template-columns: 62px 1fr 34px; align-items: center; gap: 6px; }
+.judge-axis span { font-size: 10.5px; color: var(--muted); }
+.judge-axis i { height: 4px; border-radius: 2px; background: var(--accent); display: block; }
+.judge-axis b {
+  font-size: 10.5px; color: var(--muted); font-weight: 500; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.judge-obs { margin: 0 0 10px; padding-left: 16px; }
+.judge-obs li { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.judge-meta { font-size: 10.5px; color: var(--muted); line-height: 1.45; margin-top: 4px; }
 
 /* ---- footer ---- */
 footer { padding: 7px 20px; border-top: 1px solid var(--panel-edge); }

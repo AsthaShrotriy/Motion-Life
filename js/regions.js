@@ -24,6 +24,57 @@
 const REGION_COLORS = ['#6e5cff', '#ff5c8a', '#3ddc84', '#ffd93d', '#4cc9ff', '#ff8a4c', '#b84cff', '#5cffd6'];
 const SVGNS = 'http://www.w3.org/2000/svg';
 
+/* (Step 10) SURVIVING HARDCODING, GATED AND LABELLED.
+ *
+ * `waveMode` decides whether a region's geometry is bent (a flag has to ripple) or the
+ * region is moved as a rigid whole. This regex is a guess from the layer NAME — a claim
+ * about a string an illustrator typed, not about the artwork — so it is now the LAST
+ * resort, and every selection records which evidence decided it. Strongest first, which
+ * is the order the writers actually run in (js/main.js applyMotionToActive, then
+ * runAutoLabel, and deformDefault below for a region with no motion yet):
+ *
+ *   preset_leaffall  the autumn-fall PRESET is rigid by construction (js/motions.js)
+ *   artwork_rigid    the artwork itself marks the object data-motion-mode="rigid"
+ *   motion_field     a captured motion with a real trajectory field arrived — a MEASURED
+ *                    displacement per point, so it outranks a still-image reading
+ *   vlm:<class>      the VLM looked at the layer (Contract D, js/autolabel.js)
+ *   name_hint        this regex matched                                      <- a guess
+ *   default          nothing matched; rigid
+ *
+ * `motion_field` above `vlm:<class>` is deliberate and is enforced in two places:
+ * applyMotionToActive writes it after MotionAutoLabel.apply has written the label, and
+ * runAutoLabel refuses to overwrite it when labels arrive later. The label still decides
+ * WHICH object the swatch lands on and what the region is called — only the deform mode
+ * defers to the measurement.
+ *
+ * It is kept rather than deleted because it is the only answer available with the router
+ * offline, and a flag that does not ripple is a worse failure than an honest guess. It is
+ * never consulted when a label exists: MotionAutoLabel.apply overwrites both fields.
+ */
+const CLOTH_NAME_HINT = /flag|banner|cloth|pennant|curtain|sail/i;
+
+function deformDefault(wrap, name) {
+  const store = window.__mlLayerLabels;      // set by main.js after a /label pass
+  const lab = (wrap && store && store.byEl) ? findLabel(store.byEl, wrap) : null;
+  if (lab) {
+    // the VLM read the picture; the file's layer name is the thing it was told to
+    // distrust, so its label wins for the display name too.
+    return { name: lab.label || name, waveMode: lab.deforms === 'mesh',
+             waveModeFrom: `vlm:${lab.motion_class || 'static'}`, layerLabel: lab };
+  }
+  if (CLOTH_NAME_HINT.test(name)) return { waveMode: true, waveModeFrom: 'name_hint' };
+  return { waveMode: false, waveModeFrom: 'default' };
+}
+
+// a label is attached to a LAYER GROUP; the selection wraps some descendant of it, so
+// match either direction rather than requiring the exact same node.
+function findLabel(byEl, wrap) {
+  for (const [el, lab] of byEl) {
+    if (el === wrap || el.contains(wrap) || wrap.contains(el)) return lab;
+  }
+  return null;
+}
+
 class SelectionManager {
   constructor(overlay, artworkContainer) {
     this.overlay = overlay;
@@ -39,8 +90,15 @@ class SelectionManager {
 
     this.onCreated = null;
     this.onSelected = null;
+    this.onHoverChange = null;   // (wrap|null) — fires on hover AND drag-over
+    this.onDropOnWrap = null;    // (wrap|null, event) — a motion preset was dropped
 
     this._svgClickHandler = null;
+    this._svgMoveHandler = null;
+    this._svgLeaveHandler = null;
+    this._svgDragOverHandler = null;
+    this._svgDropHandler = null;
+    this.hoveredWrap = null;
     this.highlightsHidden = false;   // hide selection outlines during playback
     this._initRasterEvents();
   }
@@ -60,28 +118,74 @@ class SelectionManager {
     // one delegated click handler on the svg
     if (this._svgClickHandler) svg.removeEventListener('click', this._svgClickHandler);
     this._svgClickHandler = (e) => {
-      let wrap = e.target.closest('.ms-wrap');
-      // Exported posters often put EVERYTHING in one layer group — wrapping
-      // that gives a single selection covering the whole artwork, which reads
-      // as "selection is broken". If the hit wrap covers most of the canvas,
-      // drill down to the actual clicked unit instead.
-      if (wrap && this._coverage(wrap, svg) > 0.7 && e.target !== wrap) {
-        const unit = this._bestUnitFor(e.target, wrap, svg);
-        if (unit && this._coverage(unit, svg) < 0.7) wrap = this._wrapOne(unit);
-      }
-      // LAZY FALLBACK: pre-wrapping can miss elements in arbitrary uploaded
-      // SVGs (odd nesting, no ids). Wrap the clicked unit on the fly.
-      if (!wrap && e.target !== svg && this._isDrawable(e.target)) {
-        const unit = this._bestUnitFor(e.target, svg, svg);
-        if (unit) wrap = this._wrapOne(unit);
-      }
-      if (!wrap) return;
+      const wrap = this.resolveWrapForTarget(e.target);
+      if (!wrap) { this.deselect(); return; }
       const existing = this.selections.findIndex(s => s.wrap === wrap);
       if (existing >= 0) { this.selectByIndex(existing); return; }
       this._createSVGSelection(wrap);
     };
     svg.addEventListener('click', this._svgClickHandler);
+
+    // hover: highlight whatever selectable unit is under the cursor, live
+    if (this._svgMoveHandler) svg.removeEventListener('mousemove', this._svgMoveHandler);
+    if (this._svgLeaveHandler) svg.removeEventListener('mouseleave', this._svgLeaveHandler);
+    this._svgMoveHandler = (e) => {
+      const wrap = this.resolveWrapForTarget(e.target);
+      if (wrap === this.hoveredWrap) return;
+      this.hoveredWrap = wrap;
+      this._renderSVGHighlights();
+      if (this.onHoverChange) this.onHoverChange(wrap);
+    };
+    this._svgLeaveHandler = () => {
+      if (!this.hoveredWrap) return;
+      this.hoveredWrap = null;
+      this._renderSVGHighlights();
+      if (this.onHoverChange) this.onHoverChange(null);
+    };
+    svg.addEventListener('mousemove', this._svgMoveHandler);
+    svg.addEventListener('mouseleave', this._svgLeaveHandler);
+
+    // motion-preset drag-and-drop: dragover must preventDefault() for the
+    // browser to allow a drop; otherwise this is the same hover hit-test.
+    if (this._svgDragOverHandler) svg.removeEventListener('dragover', this._svgDragOverHandler);
+    if (this._svgDropHandler) svg.removeEventListener('drop', this._svgDropHandler);
+    this._svgDragOverHandler = (e) => { e.preventDefault(); this._svgMoveHandler(e); };
+    this._svgDropHandler = (e) => {
+      e.preventDefault();
+      const wrap = this.resolveWrapForTarget(e.target);
+      this.hoveredWrap = null;
+      if (this.onDropOnWrap) this.onDropOnWrap(wrap, e);
+    };
+    svg.addEventListener('dragover', this._svgDragOverHandler);
+    svg.addEventListener('dragleave', this._svgLeaveHandler);
+    svg.addEventListener('drop', this._svgDropHandler);
     this._svg = svg;
+  }
+
+  /*
+   * Resolve the selectable .ms-wrap for an arbitrary event target — shared
+   * by click, hover, and drag-over hit-testing so all three agree on what
+   * "the object under the cursor" means.
+   */
+  resolveWrapForTarget(target) {
+    const svg = this._svg;
+    if (!svg) return null;
+    let wrap = target.closest ? target.closest('.ms-wrap') : null;
+    // Exported posters often put EVERYTHING in one layer group — wrapping
+    // that gives a single selection covering the whole artwork, which reads
+    // as "selection is broken". If the hit wrap covers most of the canvas,
+    // drill down to the actual target unit instead.
+    if (wrap && this._coverage(wrap, svg) > 0.7 && target !== wrap) {
+      const unit = this._bestUnitFor(target, wrap, svg);
+      if (unit && this._coverage(unit, svg) < 0.7) wrap = this._wrapOne(unit);
+    }
+    // LAZY FALLBACK: pre-wrapping can miss elements in arbitrary uploaded
+    // SVGs (odd nesting, no ids). Wrap the target unit on the fly.
+    if (!wrap && target !== svg && this._isDrawable(target)) {
+      const unit = this._bestUnitFor(target, svg, svg);
+      if (unit) wrap = this._wrapOne(unit);
+    }
+    return wrap;
   }
 
   attachRaster() {
@@ -210,8 +314,7 @@ class SelectionManager {
       wrap,
       center: [bb.x + bb.width / 2, bb.y + bb.height / 2],
       motionId: null, speed: 1.0, intensity: 1.0,
-      // cloth-like names default to wave (geometry) deformation
-      waveMode: /flag|banner|cloth|pennant|curtain|sail/i.test(name),
+      ...deformDefault(wrap, name),
     };
     this.selections.push(sel);
     this.activeIdx = this.selections.length - 1;
@@ -219,60 +322,165 @@ class SelectionManager {
     if (this.onCreated) this.onCreated(sel, this.activeIdx);
   }
 
-  // dashed highlight rects drawn INSIDE the svg so they move with animation
+  // dashed highlight rect drawn INSIDE the svg so it moves with animation.
+  // Only the ACTIVE selection and the currently HOVERED unit get a highlight —
+  // not every selection ever made — so the canvas doesn't stay cluttered.
   _renderSVGHighlights() {
     if (!this._svg) return;
     // remove old highlight layer
     let hl = this._svg.querySelector('#ms-highlights');
     if (hl) hl.remove();
-    if (this.highlightsHidden) return;   // no outlines while playing
+    // highlightsHidden only suppresses the persistent ACTIVE-selection outline
+    // during playback so it doesn't clutter a moving object — hover feedback
+    // should still work regardless, since it's a deliberate momentary action.
+    if (this.highlightsHidden && !this.hoveredWrap) return;
     hl = document.createElementNS(SVGNS, 'g');
     hl.setAttribute('id', 'ms-highlights');
     hl.setAttribute('pointer-events', 'none');
     this._svg.appendChild(hl);
 
-    this.selections.forEach((s, i) => {
-      if (s.kind !== 'svg') return;
-      const bb = s.wrap.getBBox();
-      const rect = document.createElementNS(SVGNS, 'rect');
-      rect.setAttribute('x', bb.x - 4); rect.setAttribute('y', bb.y - 4);
-      rect.setAttribute('width', bb.width + 8); rect.setAttribute('height', bb.height + 8);
-      rect.setAttribute('fill', 'none');
-      rect.setAttribute('stroke', s.color);
-      rect.setAttribute('stroke-width', i === this.activeIdx ? 2.5 : 1.5);
-      rect.setAttribute('stroke-dasharray', i === this.activeIdx ? '8 4' : '4 4');
-      rect.setAttribute('opacity', i === this.activeIdx ? 1 : 0.55);
-      // move the highlight along with its target wrap
-      const tr = s.wrap.getAttribute('transform');
-      if (tr) rect.setAttribute('transform', tr);
-      hl.appendChild(rect);
+    const hatchTags = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'text', 'tspan']);
 
-      const label = document.createElementNS(SVGNS, 'text');
-      label.setAttribute('x', bb.x); label.setAttribute('y', bb.y - 8);
-      label.setAttribute('fill', s.color);
-      label.setAttribute('font-size', '12');
-      label.setAttribute('font-family', 'sans-serif');
-      label.setAttribute('opacity', i === this.activeIdx ? 1 : 0.7);
-      if (tr) label.setAttribute('transform', tr);
-      label.textContent = s.name + (s.motionId ? ' ✓' : '');
-      hl.appendChild(label);
-    });
+    const drawOutline = (wrap, color, { active, label: labelText, forWrap }) => {
+      const bb = wrap.getBBox();
+      const tr = wrap.getAttribute('transform');
+
+      // diagonal zig-zag hatch pattern, unique per highlighted object.
+      // Each zig-zag line is drawn twice — a wider white halo underneath,
+      // then the region's own color on top — so it stays legible no matter
+      // what color the artwork underneath happens to be (a yellow or white
+      // region color would otherwise vanish against similarly-toned art).
+      const patternId = 'ms-zigzag-' + forWrap;
+      let pattern = hl.querySelector('#' + patternId);
+      if (pattern) pattern.remove();
+      pattern = document.createElementNS(SVGNS, 'pattern');
+      pattern.setAttribute('id', patternId);
+      pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+      const step = active ? 10 : 8;
+      pattern.setAttribute('width', step);
+      pattern.setAttribute('height', step);
+      pattern.setAttribute('patternTransform', 'rotate(45)');
+      const zigD = `M0,${step / 4} L${step / 2},0 L${step},${step / 4} M0,${step * 3 / 4} L${step / 2},${step / 2} L${step},${step * 3 / 4}`;
+      const zigHalo = document.createElementNS(SVGNS, 'path');
+      zigHalo.setAttribute('d', zigD);
+      zigHalo.setAttribute('fill', 'none');
+      zigHalo.setAttribute('stroke', '#ffffff');
+      zigHalo.setAttribute('stroke-width', active ? 3.5 : 3);
+      zigHalo.setAttribute('opacity', active ? 0.85 : 0.65);
+      pattern.appendChild(zigHalo);
+      const zig = document.createElementNS(SVGNS, 'path');
+      zig.setAttribute('d', zigD);
+      zig.setAttribute('fill', 'none');
+      zig.setAttribute('stroke', color);
+      zig.setAttribute('stroke-width', active ? 1.75 : 1.25);
+      zig.setAttribute('opacity', active ? 1 : 0.8);
+      pattern.appendChild(zig);
+      hl.appendChild(pattern);
+
+      // hatch fill clipped to the object's own silhouette — clone the real
+      // shape(s) and paint them with the pattern directly (not a bbox rect),
+      // so the highlight hugs the exact outline instead of a bounding box.
+      // Inline style beats any CSS class the uploaded SVG defines its fill
+      // with (e.g. Illustrator exports use <style>.cls-1{fill:...}</style>),
+      // which a plain `fill` attribute would lose to.
+      const hatch = wrap.cloneNode(true);
+      hatch.removeAttribute('id');
+      hatch.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+      hatch.setAttribute('data-ms-hatch-for', forWrap);
+      const hatchShape = (el) => {
+        el.removeAttribute('class');
+        el.removeAttribute('stroke');
+        el.style.fill = `url(#${patternId})`;
+      };
+      if (hatchTags.has(hatch.tagName.toLowerCase())) hatchShape(hatch);
+      hatch.querySelectorAll('*').forEach(el => {
+        if (hatchTags.has(el.tagName.toLowerCase())) hatchShape(el);
+      });
+      hatch.querySelectorAll('image').forEach(img => {
+        const rect = document.createElementNS(SVGNS, 'rect');
+        rect.setAttribute('x', img.getAttribute('x') || 0);
+        rect.setAttribute('y', img.getAttribute('y') || 0);
+        rect.setAttribute('width', img.getAttribute('width') || 0);
+        rect.setAttribute('height', img.getAttribute('height') || 0);
+        hatchShape(rect);
+        img.replaceWith(rect);
+      });
+      if (tr) hatch.setAttribute('transform', tr);
+      hl.appendChild(hatch);
+
+      // thin outline tracing the exact silhouette on top, for definition —
+      // a wider white halo copy first, then the region's color on top
+      const makeOutline = (haloPass) => {
+        const el = wrap.cloneNode(true);
+        el.removeAttribute('id');
+        el.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+        if (!haloPass) el.setAttribute('data-ms-outline-for', forWrap);
+        const shape = (n) => {
+          n.removeAttribute('class');
+          n.style.fill = 'none';
+          n.style.stroke = haloPass ? '#ffffff' : color;
+          n.style.strokeOpacity = haloPass ? (active ? 0.85 : 0.65) : (active ? 1 : 0.85);
+          n.style.strokeWidth = haloPass ? (active ? 3.5 : 3) : (active ? 1.5 : 1.1);
+        };
+        shape(el);
+        el.querySelectorAll('*').forEach(shape);
+        if (tr) el.setAttribute('transform', tr);
+        return el;
+      };
+      hl.appendChild(makeOutline(true));
+      hl.appendChild(makeOutline(false));
+
+      if (labelText) {
+        const label = document.createElementNS(SVGNS, 'text');
+        label.setAttribute('x', bb.x); label.setAttribute('y', bb.y - 8);
+        label.setAttribute('fill', color);
+        label.setAttribute('font-size', '12');
+        label.setAttribute('font-family', 'sans-serif');
+        label.setAttribute('data-ms-label-for', forWrap);
+        label.style.paintOrder = 'stroke';
+        label.style.stroke = '#ffffff';
+        label.style.strokeWidth = '3px';
+        label.style.strokeLinejoin = 'round';
+        if (tr) label.setAttribute('transform', tr);
+        label.textContent = labelText;
+        hl.appendChild(label);
+      }
+    };
+
+    const active = this.getActive();
+    if (active && active.kind === 'svg' && !this.highlightsHidden) {
+      drawOutline(active.wrap, active.color, {
+        active: true,
+        label: active.name + (active.motionId ? ' ✓' : ''),
+        forWrap: 'active',
+      });
+    }
+
+    if (this.hoveredWrap && this.hoveredWrap !== (active && active.wrap)) {
+      const existing = this.selections.find(s => s.wrap === this.hoveredWrap);
+      const color = existing ? existing.color : '#2b2b3d';
+      drawOutline(this.hoveredWrap, color, {
+        active: false,
+        label: existing ? existing.name + (existing.motionId ? ' ✓' : '') : (this.hoveredWrap.getAttribute('data-ms-name') || ''),
+        forWrap: 'hover',
+      });
+    }
   }
 
-  // keep highlight rects glued to moving wraps (called each animation frame)
+  // keep the highlight glued to the moving wrap (called each animation frame)
   syncHighlights() {
     if (this.mode !== 'svg' || !this._svg) return;
     const hl = this._svg.querySelector('#ms-highlights');
     if (!hl) return;
-    const kids = hl.children;
-    let k = 0;
-    for (let i = 0; i < this.selections.length; i++) {
-      const s = this.selections[i];
-      if (s.kind !== 'svg') continue;
-      const tr = s.wrap.getAttribute('transform') || '';
-      if (kids[k]) kids[k].setAttribute('transform', tr);       // rect
-      if (kids[k + 1]) kids[k + 1].setAttribute('transform', tr); // label
-      k += 2;
+    const active = this.getActive();
+    if (active && active.kind === 'svg') {
+      const tr = active.wrap.getAttribute('transform') || '';
+      const hatch = hl.querySelector('[data-ms-hatch-for="active"]');
+      const outline = hl.querySelector('[data-ms-outline-for="active"]');
+      const label = hl.querySelector('[data-ms-label-for="active"]');
+      if (hatch) hatch.setAttribute('transform', tr);
+      if (outline) outline.setAttribute('transform', tr);
+      if (label) label.setAttribute('transform', tr);
     }
   }
 
@@ -367,6 +575,14 @@ class SelectionManager {
     if (this.onSelected) this.onSelected(this.selections[idx], idx);
   }
   getActive() { return this.activeIdx >= 0 ? this.selections[this.activeIdx] : null; }
+
+  // clear the active selection — clicking empty canvas or pressing Escape
+  deselect() {
+    if (this.activeIdx === -1) return;
+    this.activeIdx = -1;
+    if (this.mode === 'svg') this._renderSVGHighlights(); else this.redraw();
+    if (this.onSelected) this.onSelected(null, -1);
+  }
 
   deleteActive() {
     const s = this.getActive();

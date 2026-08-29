@@ -52,29 +52,69 @@ function buildChipState(m) {
   if (m.trajectories && m.trajectories.length >= 25) {
     // subsample the 12x12 grid to 5x5, store drift-removed relative tracks
     const G = Math.round(Math.sqrt(m.trajectories.length));   // 12
-    const idx = [];
-    for (let gy = 0; gy < GRID_N; gy++)
-      for (let gx = 0; gx < GRID_N; gx++)
-        idx.push(Math.min(G - 1, Math.round(gy * (G - 1) / (GRID_N - 1))) * G
-               + Math.min(G - 1, Math.round(gx * (G - 1) / (GRID_N - 1))));
-    const tracks = idx.map(i => {
-      const tr = m.trajectories[i];
+    const rel = m.trajectories.map(tr => {
       const x0 = tr[0][0], y0 = tr[0][1];
       return tr.map(p => [p[0] - x0, p[1] - y0]);
     });
-    return { tracks };
+    // Lay the 5x5 lattice over the cells that actually MOVED, not over the whole frame.
+    // A field can be mostly frozen on purpose — the object mask (Step 2) pins background
+    // cells, and segmented regions pin out-of-region cells — so a fixed frame-wide lattice
+    // could sample 25 stationary cells and show a dead chip for a motion that is fine.
+    // activeCellWindow is shared with buildTrajField (js/motionfields.js) so the chip and
+    // the animation can never disagree about where the motion is.
+    const [a0, a1, b0, b1] = activeCellWindow(rel, G);
+    const idx = [];
+    for (let gy = 0; gy < GRID_N; gy++)
+      for (let gx = 0; gx < GRID_N; gx++)
+        idx.push((b0 + Math.round(gy * (b1 - b0) / (GRID_N - 1))) * G
+               + (a0 + Math.round(gx * (a1 - a0) / (GRID_N - 1))));
+    return { tracks: idx.map(i => rel[i]) };
   }
   return { tracks: null };
 }
 
-// select + apply a motion, keeping presets / extracted swatches / videos in sync
+// Clicking a motion preset only ever applies to whatever object is already
+// active — motion is a property OF an object, never a global "armed" state
+// that silently reattaches to the next thing you happen to select or create
+// (that used to make one object's motion change whenever you picked a new
+// preset while browsing, and made new selections inherit a stale motion).
 function selectMotion(id) {
+  const active = sel.getActive();
+  if (!active) {
+    status('Select an object first, or drag this preset onto one.', true);
+    return;
+  }
   library.select(id);
-  renderMotionList();
   const applied = applyMotionToActive();
   const m = library.getById(id);
+  renderMotionList();
   status(applied ? `Applied "${m.name}" to "${applied}".`
                  : `Motion "${m.name}" selected — now click an object to apply it.`, true);
+}
+
+// The preset-chip ring always reflects the ACTIVE OBJECT's own motion, never
+// a leftover "last thing you clicked" — so switching objects (or deselecting)
+// must resync it every time, rather than leaving stale chip state on screen.
+function syncArmedMotionToSelection() {
+  const active = sel.getActive();
+  library.select(active ? active.motionId : null);
+  renderMotionList();
+}
+
+// (Step 7) One line per swatch, read from the UNIFIED Contract-B core — so a texture, a
+// skeleton and a path describe themselves in exactly the same terms in the library instead
+// of each backend inventing its own wording. Only the core is read here (kind, class,
+// engine, frames, fps, confidence + what that confidence MEANS); the kind-specific payload
+// is the applicator's business. Motions without swatches (presets, the in-browser
+// Lucas–Kanade fallback) keep their own `desc` — an empty list is honest, not a gap to fill.
+function swatchSummary(m) {
+  const sws = Array.isArray(m.swatches) ? m.swatches : [];
+  if (!sws.length) return m.desc || m.name;
+  return sws.map(s =>
+    `${s.kind} · ${s.class || 'unclassified'} · ${s.engine} · ${s.frames} frames @ ${s.fps}fps · `
+    + `confidence ${Math.round(s.confidence * 100)}% (${s.confidence_of})`
+    + (s.warnings && s.warnings.length ? `\n    ⚠ ${s.warnings.join('\n    ⚠ ')}` : '')
+  ).join('\n');
 }
 
 function makeChip(m, container) {
@@ -87,8 +127,15 @@ function makeChip(m, container) {
   label.textContent = m.name;
   tile.appendChild(canvas);
   tile.appendChild(label);
-  tile.title = m.desc || m.name;
+  tile.title = `${m.name}\n${swatchSummary(m)}`;
   tile.onclick = () => selectMotion(m.id);
+  tile.draggable = true;
+  tile.ondragstart = (e) => {
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/plain', m.id);
+    startMotionDrag(m.id);
+  };
+  tile.ondragend = () => endMotionDrag();
   container.appendChild(tile);
   chipTiles.push({ canvas, ctx: canvas.getContext('2d'), motion: m, ...buildChipState(m) });
 }
@@ -182,11 +229,11 @@ chipLoop();
 // =========================================================================
 const sel = new SelectionManager(overlay, artContainer);
 
-sel.onCreated = (s, idx) => { renderChips(); showInspector(s); applyMotionToActive(); refreshHighlightsSoon(); };
-sel.onSelected = (s, idx) => { renderChips(); showInspector(s); };
+sel.onCreated = (s, idx) => { renderChips(); showInspector(s); syncArmedMotionToSelection(); refreshHighlightsSoon(); };
+sel.onSelected = (s, idx) => { renderChips(); if (s) showInspector(s); else hideInspector(); syncArmedMotionToSelection(); };
 
-function applyMotionToActive() {
-  const s = sel.getActive();
+function applyMotionToActive(targetSel) {
+  const s = targetSel || sel.getActive();
   const m = library.getSelected();
   if (s && m) {
     s.motionId = m.id;
@@ -196,12 +243,17 @@ function applyMotionToActive() {
     const motionMode = modeEl ? modeEl.getAttribute('data-motion-mode') : 'auto';
     // captured motions carry a real trajectory field — geometry deformation
     // unless the artwork marks the selected object as structurally rigid.
+    // (Step 10) waveModeFrom records WHICH evidence decided the deform mode, so a
+    // layer-name regex is never presented as if the artwork had been looked at.
+    // See CLOTH_NAME_HINT in js/regions.js for the full precedence.
     if (motionMode === 'rigid') {
       s.waveMode = false;
+      s.waveModeFrom = 'artwork_rigid';
     } else if (s.kind === 'svg' && m.trajectories && m.trajectories.length && !(m.params && m.params.leafFall)) {
       s.waveMode = true;
+      s.waveModeFrom = 'motion_field';
     }
-    if (m.params && m.params.leafFall) s.waveMode = false;
+    if (m.params && m.params.leafFall) { s.waveMode = false; s.waveModeFrom = 'preset_leaffall'; }
     // switching motions invalidates deformation caches
     if (s.wrap) {
       for (const el of s.wrap.querySelectorAll('path[data-ms-d0]')) el.setAttribute('d', el.getAttribute('data-ms-d0'));
@@ -209,12 +261,87 @@ function applyMotionToActive() {
     if (s._leaves) { for (const lf of s._leaves) { lf.el.removeAttribute('transform'); lf.el.style.opacity = ''; } s._leaves = null; }
     s._wave = null; s._field = undefined; s._fieldMotion = null; s._text = undefined;
     s._char = null; s._charMotion = null;
+    // Step 8 applicators cache per-motion state (mesh lattice, per-member flock room)
+    s._mesh = null; s._meshMotion = null; s._meshAnchor = null;
+    s._flock = null; s._flockMotion = null;
     showInspector(s);
     if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw();
+    // Applying a motion always starts playback — no manual play needed.
+    if (!animator.playing) animator.play();
+    if (typeof syncPlayButton === 'function') syncPlayButton();
     return s.name;
   }
   return null;
 }
+
+// =========================================================================
+//  Drag a motion preset onto an object: live-preview while hovering, revert
+//  the moment the cursor leaves it, commit for real only on drop.
+// =========================================================================
+let dragMotionId = null;   // the preset id currently being dragged, or null
+let previewWrap = null;    // the .ms-wrap currently showing the live preview
+let previewRaf = null;
+const previewT0 = () => performance.now() / 1000;
+let previewStart = 0;
+
+function startMotionDrag(motionId) {
+  dragMotionId = motionId;
+}
+
+function previewMotionOn(wrap, motionId) {
+  stopPreview();
+  const motion = library.getById(motionId);
+  if (!wrap || !motion || !motion.params) return;
+  previewWrap = wrap;
+  animator.previewWrap = wrap;   // tell the real animator to leave this wrap alone
+  previewStart = previewT0();
+  const bb = wrap.getBBox();
+  const cx = bb.x + bb.width / 2, cy = bb.y + bb.height / 2;
+  const seed = (cx * 0.01 + cy * 0.03) % 1;
+  const tick = () => {
+    if (previewWrap !== wrap) return;   // superseded or stopped
+    const t = (previewT0() - previewStart);
+    const { dx, dy, rot } = computeMotion(motion.params, seed, t, 1);
+    wrap.setAttribute('transform', `translate(${dx.toFixed(2)} ${dy.toFixed(2)}) rotate(${rot.toFixed(3)} ${cx.toFixed(1)} ${cy.toFixed(1)})`);
+    previewRaf = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function stopPreview() {
+  if (previewRaf) cancelAnimationFrame(previewRaf);
+  previewRaf = null;
+  if (previewWrap) previewWrap.setAttribute('transform', '');
+  previewWrap = null;
+  animator.previewWrap = null;
+}
+
+function endMotionDrag() {
+  stopPreview();
+  dragMotionId = null;
+}
+
+sel.onHoverChange = (wrap) => {
+  if (!dragMotionId) return;   // only preview during an active preset drag
+  if (wrap === previewWrap) return;
+  if (!wrap) { stopPreview(); return; }
+  previewMotionOn(wrap, dragMotionId);
+};
+
+sel.onDropOnWrap = (wrap) => {
+  if (!dragMotionId || !wrap) { endMotionDrag(); return; }
+  const motionId = dragMotionId;
+  stopPreview();
+  dragMotionId = null;
+  const existingIdx = sel.selections.findIndex(s => s.wrap === wrap);
+  if (existingIdx >= 0) sel.selectByIndex(existingIdx);
+  else sel._createSVGSelection(wrap);
+  library.select(motionId);
+  applyMotionToActive();
+  syncArmedMotionToSelection();
+  const m = library.getById(motionId);
+  status(`Applied "${m.name}" to "${wrap.getAttribute('data-ms-name') || 'object'}".`, true);
+};
 
 // =========================================================================
 //  Artwork loading + scene tabs (Poster / Scenery)
@@ -224,15 +351,18 @@ let currentScene = 'poster';
 // file-based scenes: fetched from disk and loaded through the same SVG path as
 // an uploaded artwork (so the .layer[data-name] contract makes objects selectable)
 const FILE_SCENES = {
-  train: 'assets/scenes/train-window-adobe.svg',
+  // `train` has no scene tab (it was removed from the UI); the entry stays so
+  // loadScene('train') still works from the console. The file moved to
+  // assets/Artwork/ and this path had been left pointing at the old location,
+  // where it 404'd into "Could not load that scene."
+  train: 'assets/Artwork/train-window-adobe.svg',
   character: 'assets/scenes/character-bear.svg',
 };
 
 async function loadScene(name) {
   currentScene = name;
   animator.pause();
-  $('btn-play').textContent = '▶ Play';
-  $('btn-play').classList.remove('playing');
+  syncPlayButton();
 
   for (const b of document.querySelectorAll('.scene-tab'))
     b.classList.toggle('active', b.dataset.scene === name);
@@ -264,6 +394,29 @@ for (const b of document.querySelectorAll('.scene-tab'))
   b.onclick = () => loadScene(b.dataset.scene);
 
 function loadDefaultScenery() { loadScene('scenery'); }
+
+// A blank canvas — no default artwork. Upload art to begin.
+function loadBlank() {
+  currentScene = null;
+  animator.pause();
+  syncPlayButton();
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 800 500');
+  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  svg.style.width = '100%';
+  svg.style.height = '100%';
+  svg.innerHTML = `<rect id="ml-canvas-bg" width="800" height="500" fill="#ffffff"/>`;
+
+  artContainer.innerHTML = '';
+  artContainer.appendChild(svg);
+  syncOverlay();
+  sel.attachSVG(svg);
+  setModeUI('svg');
+  renderChips(); hideInspector(); showLayers();
+
+  status('Blank canvas — upload artwork to begin.');
+}
 
 function loadUploadedSVG(text) {
   artContainer.innerHTML = text;
@@ -329,16 +482,27 @@ function showInspector(s) {
     badge.classList.add('assigned');
   } else { badge.textContent = 'None — select a motion'; badge.classList.remove('assigned'); }
   markLayerActive(s.wrap);
+  showJudge(s);
 }
-function hideInspector() { $('inspector-section').hidden = true; $('inspector-content').hidden = true; markLayerActive(null); }
+function hideInspector() { $('inspector-section').hidden = true; $('inspector-content').hidden = true; markLayerActive(null); showJudge(null); }
 
 // Layers panel appears once artwork is present (poster / scenery / upload)
 // and lists the artwork's groups/layers as a collapsible tree.
 const layerRowByWrap = new Map();   // ms-wrap element -> its layer row
 
+// (Step 10) the last /label pass over the loaded artwork, or null. Declared here rather
+// than beside its button so showLayers() — which runs at boot — can clear it without
+// depending on declaration order.
+let layerLabelling = null;
+
 function showLayers() {
   const section = $('layers-section');
   if (!section) return;
+  // (Step 10) new artwork invalidates every label — they were about the OLD picture, and
+  // a stale label would auto-apply a swatch to whatever now sits in that layer slot.
+  layerLabelling = null;
+  window.__mlLayerLabels = null;
+  const out = $('autolabel-out'); if (out) out.innerHTML = '';
   const svg = artContainer.querySelector('svg');
   if (!svg) { section.hidden = true; return; }   // raster: no groups to show
   section.hidden = false;
@@ -387,6 +551,19 @@ function buildLayerNode(el, depth) {
   label.textContent = decodeLayerName(el.getAttribute('data-name') || el.id) || '<Group>';
 
   row.append(caret, eye, label);
+  // (Step 10) what the VLM said this layer IS, beside what the file called it. Both are
+  // shown: the point of the feature is that they often disagree, and hiding the file's
+  // name would make an auto-apply impossible to sanity-check.
+  const lab = layerLabelling && layerLabelling.byEl.get(el);
+  if (lab) {
+    const badge = document.createElement('span');
+    badge.className = 'layer-class' + (lab.motion_class ? '' : ' static');
+    badge.textContent = lab.motion_class ? `${lab.label} · ${lab.motion_class}` : `${lab.label} · static`;
+    badge.title = `VLM: ${lab.label} — ${lab.motion_class || 'should not move'} `
+                + `(${Math.round(lab.confidence * 100)}%, ${lab.deforms})`
+                + (lab.notes ? `\n${lab.notes}` : '');
+    row.appendChild(badge);
+  }
   node.appendChild(row);
 
   const wrap = el.closest('.ms-wrap');
@@ -445,26 +622,14 @@ $('btn-remove-motion').onclick = () => {
   const s = sel.getActive();
   if (!s) return;
   s.motionId = null;
-  if (s.wrap) {
-    s.wrap.setAttribute('transform', '');
-    const canopy = s.wrap.querySelector('[data-motion-role="tree-canopy"]');
-    if (canopy) canopy.removeAttribute('transform');
-  }
-  if (s._leaves) {
-    for (const lf of s._leaves) {
-      lf.el.removeAttribute('transform');
-      lf.el.style.opacity = '';
-    }
-    s._leaves = null;
-    s._leavesMotion = null;
-  }
-  if (s.floatEl) s.floatEl.style.transform = '';
+  animator._resetOne(s);   // undo whichever special-case animator was driving it, fully
   showInspector(s);
   renderChips();
   if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw();
+  syncArmedMotionToSelection();
   status('Motion removed.');
 };
-$('btn-delete-region').onclick = () => { sel.deleteActive(); renderChips(); const a = sel.getActive(); if (a) showInspector(a); else hideInspector(); status('Region deleted.'); };
+$('btn-delete-region').onclick = () => { sel.deleteActive(); renderChips(); const a = sel.getActive(); if (a) showInspector(a); else hideInspector(); syncArmedMotionToSelection(); status('Region deleted.'); };
 
 // =========================================================================
 //  Tools
@@ -475,17 +640,29 @@ $('btn-tool-rect').onclick = () => { sel.setTool('rect'); $('btn-tool-rect').cla
 //  Animator + play
 // =========================================================================
 const animator = new Animator(sel, library);
-$('btn-play').onclick = () => {
-  if (!sel.selections.some(s => s.motionId)) {
-    status('Assign a motion to at least one object first.');
-    return;
-  }
-  const playing = animator.toggle();
-  sel.setHighlightsHidden(playing);   // outlines only in pause state
-  $('btn-play').textContent = playing ? '⏸ Pause' : '▶ Play';
-  $('btn-play').classList.toggle('playing', playing);
-  status(playing ? 'Playing.' : 'Paused.');
-};
+
+// Header Play/Pause button. The app also auto-plays whenever a motion is
+// applied (see applyMotionToActive); this button is a manual global toggle and
+// a live indicator of play state. syncPlayButton() keeps its label in sync with
+// whatever the animator is doing, however playback was started.
+function syncPlayButton() {
+  const btn = $('btn-play');
+  if (!btn) return;
+  btn.textContent = animator.playing ? '⏸ Pause' : '▶ Play';
+  btn.classList.toggle('playing', animator.playing);
+}
+if ($('btn-play')) {
+  $('btn-play').onclick = () => {
+    if (!animator.playing && !sel.selections.some(s => s.motionId)) {
+      status('Assign a motion to at least one object first.');
+      return;
+    }
+    const playing = animator.toggle();
+    sel.setHighlightsHidden(playing);   // outlines only in pause state
+    syncPlayButton();
+    status(playing ? 'Playing.' : 'Paused.');
+  };
+}
 
 // =========================================================================
 //  Video export (for Reels)
@@ -553,21 +730,13 @@ function renderVideoList() {
     vid.play().catch(() => {});
   });
 }
-// synthetic downward motion field so the extraction moment plays over any
-// falling-leaves clip even without the analysis service running
-function synthFallTrajectories() {
-  const G = 12, F = 20, tracks = [];
-  for (let gy = 0; gy < G; gy++) for (let gx = 0; gx < G; gx++) {
-    const x0 = (gx + 0.5) / G, y0 = (gy + 0.5) / G, seed = gx * 7 + gy * 13;
-    const tr = [];
-    for (let f = 0; f < F; f++) {
-      const p = f / (F - 1);
-      tr.push([x0 + 0.03 * Math.sin(p * 6 + seed), y0 + p * 0.42]);
-    }
-    tracks.push(tr);
-  }
-  return tracks;
-}
+// (Step 10) synthFallTrajectories() used to live here: a hand-written sine-and-fall
+// field that js/upload.js played over any clip whose FILENAME matched /leaf|autumn/,
+// then saved as a motion called "Autumn Fall". It is gone, along with the filename
+// branch that used it. A falling-leaves clip now goes through the same VLM route ->
+// RAFT -> distill path as everything else, and what the user sees animated is what was
+// measured. The hand-tuned leaf behaviour survives ONLY as a named preset in
+// js/motions.js, where it is honestly labelled as one.
 $('motion-input').onchange = (e) => window.handleMotionUpload(e);
 
 // =========================================================================
@@ -586,6 +755,175 @@ if (btnExportSvg) btnExportSvg.onclick = () => {
   a.click(); URL.revokeObjectURL(a.href);
   status('Exported! Drop the .svg into any website — <img src="motionlife-poster.svg"> — it animates by itself.', true);
 };
+
+// =========================================================================
+//  Motion judge + auto-tune (Step 9) — on demand only, never automatic
+// =========================================================================
+const judgeOut = $('judge-out');
+const btnJudge = $('btn-judge');
+const btnJudgeRevert = $('btn-judge-revert');
+let judgeUndo = null;         // { motionId, params } — the params from before the last run
+
+function showJudge(s) {
+  const section = $('judge-section');
+  if (!section) return;
+  // only offered where it can actually work: a vector scene with a motion assigned
+  const ok = !!(s && s.motionId && sel.mode === 'svg');
+  section.hidden = !ok;
+  if (!ok && judgeOut) judgeOut.innerHTML = '';
+}
+
+if (btnJudge) btnJudge.onclick = async () => {
+  const s = sel.getActive();
+  const motion = s && s.motionId ? library.getById(s.motionId) : null;
+  if (!motion) { status('Select an object with a motion assigned first.'); return; }
+
+  btnJudge.disabled = true;
+  const paint = st => window.MotionJudge.render(judgeOut, st);
+  paint({ busy: 'Starting…' });
+  const before = { ...(motion.params || {}) };
+  try {
+    const linked = uploadedVideos.find(v => v.motionId === motion.id);
+    const res = await window.MotionJudge.tune({
+      sel, animator, motion,
+      sourceUrl: linked ? linked.url : null,
+      onStatus: msg => paint({ busy: msg }),
+      onStep: st => paint({ ...st, iterations: st.iteration, scoreOf: null }),
+    });
+    paint(res);
+    judgeUndo = { motionId: motion.id, params: before };
+    if (btnJudgeRevert) btnJudgeRevert.hidden = false;
+    const v = res.verdict;
+    status(v ? `Judge: ${Math.round(v.score * 100)}% after ${res.iterations} pass`
+              + `${res.iterations === 1 ? '' : 'es'} — ${res.reason}`
+             : `Judge stopped: ${res.reason}`, !!v && v.score >= 0.8);
+    renderMotionList();     // the chips draw from params, which may have moved
+  } catch (e) {
+    motion.params = before;                       // a failed run leaves nothing behind
+    paint({ error: `${e.message}` });
+    status(`Judge unavailable: ${e.message}. Is the router running on :8871?`);
+  } finally {
+    btnJudge.disabled = false;
+  }
+};
+
+if (btnJudgeRevert) btnJudgeRevert.onclick = () => {
+  if (!judgeUndo) return;
+  const m = library.getById(judgeUndo.motionId);
+  if (m) m.params = judgeUndo.params;
+  judgeUndo = null;
+  btnJudgeRevert.hidden = true;
+  if (judgeOut) judgeOut.innerHTML = '';
+  renderMotionList();
+  status('Tuning undone — the motion is back to its extracted params.', true);
+};
+
+// =========================================================================
+//  Auto-label the artwork's layers (Step 10) — one vision call, on demand
+// =========================================================================
+// The result is parked on window.__mlLayerLabels so js/regions.js can consult it when a
+// NEW selection is created (a label beats the layer-name regex, see CLOTH_NAME_HINT) and
+// js/upload.js can auto-apply against it. A global rather than a parameter because both
+// of those run from outside this IIFE, on paths the user drives, not on a call chain.
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function paintAutoLabel(state) {
+  const el = $('autolabel-out');
+  if (!el) return;
+  if (state.busy) { el.innerHTML = `<div class="judge-busy">${esc(state.busy)}</div>`; return; }
+  if (state.error) { el.innerHTML = `<div class="judge-err">${esc(state.error)}</div>`; return; }
+  const labs = state.labels || [];
+  const moving = labs.filter(l => l.motion_class);
+  el.innerHTML = `
+    <div class="judge-meta">${labs.length} layer${labs.length === 1 ? '' : 's'} labelled —
+      ${moving.length} could move, ${labs.length - moving.length} left static.</div>
+    ${labs.length ? `<ul class="judge-obs">${labs.map(l => `<li>${esc(l.label)} —
+      <b>${esc(l.motion_class || 'static')}</b> ${Math.round(l.confidence * 100)}%
+      ${l.motion_class ? `(${esc(l.deforms)})` : ''}</li>`).join('')}</ul>` : ''}
+    ${(state.warnings || []).length
+      ? `<div class="judge-meta">${state.warnings.map(esc).join(' · ')}</div>` : ''}`;
+}
+
+/* Run one labelling pass over the loaded SVG. Returns the labelling, or null.
+   `groupsOf` is layerGroups — the same tree walk the Layers panel draws from, handed to
+   autolabel.js so "what counts as a layer" has one definition. */
+async function runAutoLabel() {
+  const svg = artContainer.querySelector('svg');
+  if (!svg) { paintAutoLabel({ error: 'auto-label needs a vector artwork (SVG).' }); return null; }
+  const res = await window.MotionAutoLabel.label({
+    svg, animator, capture, groupsOf: layerGroups,
+    onStatus: msg => paintAutoLabel({ busy: msg }),
+  });
+  if (res.error) { paintAutoLabel(res); return null; }
+  layerLabelling = res;
+  window.__mlLayerLabels = res;
+  // labels the VLM gave for layers the user has ALREADY selected: adopt them now rather
+  // than only on the next click, so the panel and the regions agree immediately.
+  for (const s of sel.selections || []) {
+    if (!s.wrap) continue;
+    const lab = [...res.byEl.entries()].find(([el]) =>
+      el === s.wrap || el.contains(s.wrap) || s.wrap.contains(el));
+    if (!lab) continue;
+    s.layerLabel = lab[1];
+    if (lab[1].label) s.name = lab[1].label;
+    // waveMode is only overwritten when nothing stronger decided it: a captured motion
+    // with a real trajectory field is direct evidence and outranks a still-image reading.
+    if (s.waveModeFrom !== 'motion_field' && s.waveModeFrom !== 'artwork_rigid') {
+      s.waveMode = lab[1].deforms === 'mesh';
+      s.waveModeFrom = `vlm:${lab[1].motion_class || 'static'}`;
+    }
+  }
+  paintAutoLabel(res);
+  renderLayers(svg);
+  renderChips();
+  if (sel.mode === 'svg') sel._renderSVGHighlights();
+  const a = sel.getActive(); if (a) showInspector(a);
+  return res;
+}
+
+const btnAutoLabel = $('btn-autolabel');
+if (btnAutoLabel) btnAutoLabel.onclick = async () => {
+  btnAutoLabel.disabled = true;
+  try {
+    const res = await runAutoLabel();
+    if (res) {
+      const moving = res.labels.filter(l => l.motion_class).length;
+      status(`Labelled ${res.labels.length} layers — ${moving} can take motion. `
+             + 'Upload a clip and its swatches will land on the right objects.', true);
+    }
+  } catch (e) {
+    paintAutoLabel({ error: e.message });
+    status(`Auto-label failed: ${e.message}`);
+  } finally {
+    btnAutoLabel.disabled = false;
+  }
+};
+
+/* Auto-apply, for js/upload.js: label the artwork if it has not been labelled yet, then
+   put each motion on the layer its class matches. Returns {applied, skipped} — and
+   applies NOTHING when there are no labels, rather than guessing from names. */
+async function autoApplyMotions(motions) {
+  const svg = artContainer.querySelector('svg');
+  if (!svg) return { applied: [], skipped: [], reason: 'auto-apply needs a vector artwork (SVG).' };
+  if (!motions.length) return { applied: [], skipped: [] };
+  if (!layerLabelling) await runAutoLabel();
+  // runAutoLabel already painted the reason into #autolabel-out; hand it to the caller too
+  // so the upload status can say WHY nothing was applied instead of going quiet.
+  if (!layerLabelling) {
+    return { applied: [], skipped: motions.map(m => ({ motionId: m.id, why: 'no layer labels' })),
+             reason: 'The artwork could not be labelled, so nothing was auto-applied —' };
+  }
+  const res = await window.MotionAutoLabel.apply({
+    motions, labelling: layerLabelling, sel, library, animator, applyMotionToActive,
+  });
+  if (res.applied.length) {
+    renderChips();
+    if (sel.mode === 'svg') sel._renderSVGHighlights();
+    const a = sel.getActive(); if (a) showInspector(a);
+  }
+  return res;
+}
 
 // =========================================================================
 //  Upload artwork
@@ -632,8 +970,23 @@ if (rightCollapse) {
   };
 }
 
+// Escape clears the active selection, matching common design-tool convention
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') sel.deselect();
+});
+
+// Clicking the dark letterboxed area around the artwork (not the artwork
+// itself) also deselects — it reads as "empty space" even though technically
+// nothing is there to click.
+const canvasWrap = $('canvas-wrap');
+if (canvasWrap) {
+  canvasWrap.addEventListener('click', (e) => {
+    if (e.target === canvasWrap) sel.deselect();
+  });
+}
+
 renderMotionList();
-loadScene('poster');
+loadBlank();
 
 // expose for automated testing
 window.__ms = { sel, library, animator, loadScene, loadUploadedSVG, loadRasterImage };
@@ -641,6 +994,6 @@ window.__ms = { sel, library, animator, loadScene, loadUploadedSVG, loadRasterIm
 // bridge: upload.js is a separate script and can't see these IIFE-local symbols,
 // so hand them across explicitly (it destructures window.__mlUpload at call time).
 window.__mlUpload = { $, status, capture, library, sel, renderMotionList,
-  addVideoThumb, synthFallTrajectories, showInspector, applyMotionToActive };
+  addVideoThumb, showInspector, applyMotionToActive, autoApplyMotions };
 
 })();
