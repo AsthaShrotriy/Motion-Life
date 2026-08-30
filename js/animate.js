@@ -40,6 +40,58 @@ const RIBBON_KN_MAX = 0.8;
  * the extracted flutter's own 4s loop, so a scarf completes a whole gust per crossing. */
 const ROUTE_SECONDS = 4.0;
 
+/*
+ * LIMB RIG (see _applyLimbs). Each artwork group tagged data-limb="<role>" is rotated about
+ * its joint by the angle the SAME bone makes in the captured pose, frame for frame.
+ *
+ * The roles map to the 13 joints MediaPipe gives us. '@sho' / '@hip' are the shoulder and
+ * hip midpoints — virtual joints, so the head and torso are driven by exactly the same
+ * bone-angle code as a real limb instead of needing their own special case.
+ */
+const LIMB_BONES = {
+  'arm-l': ['l_sho', 'l_elb'], 'arm-r': ['r_sho', 'r_elb'],
+  'forearm-l': ['l_elb', 'l_wri'], 'forearm-r': ['r_elb', 'r_wri'],
+  'leg-l': ['l_hip', 'l_knee'], 'leg-r': ['r_hip', 'r_knee'],
+  'shin-l': ['l_knee', 'l_ank'], 'shin-r': ['r_knee', 'r_ank'],
+  'head': ['@sho', 'nose'], 'torso': ['@hip', '@sho'],
+};
+
+/*
+ * Which limb each one hangs off. Without this the rig is FLAT: every limb rotates about a
+ * point that never moves, so when the torso leans the shoulders travel and the arms do not
+ * follow. Measured on the rigged boy over the shipped walk, that opened a 54.8px gap at the
+ * left shoulder, 56.1px at the right and 57.7px at the neck (worst frame t=8.07, visible as
+ * the arm separating at the armpit). Composing the parent's rotation outside the child's
+ * closes it: a child rotates about its own joint first, then rides its parent.
+ *
+ * Legs list the torso too even though a hip pivot is nearly the torso's own pivot — "nearly"
+ * was 11.7-13.2px of the same gap, because a hand-placed hip is not exactly the hip midpoint.
+ */
+const LIMB_PARENT = {
+  'arm-l': 'torso', 'arm-r': 'torso', 'head': 'torso',
+  'leg-l': 'torso', 'leg-r': 'torso',
+  'forearm-l': 'arm-l', 'forearm-r': 'arm-r',
+  'shin-l': 'leg-l', 'shin-r': 'leg-r',
+};
+
+/* MediaPipe's own visibility. Below this the landmark is an inference, not an observation. */
+const LIMB_VIS_OK = 0.5;
+
+/*
+ * A bone pointing at the camera projects SHORT, and its 2D angle becomes noise — at the
+ * limit an arm aimed straight down the lens has no direction on screen at all. So a frame
+ * is only believed while the bone still projects at least this fraction of its own median
+ * length. Measured on the shipped walk (assets/motion/walk-pose.json): at 0.6 the right arm
+ * and both legs keep all 132 frames, while the left arm keeps NONE — that subject is
+ * side-on with the left side occluded. A limb with no usable frame holds its drawn pose;
+ * see the note in _applyLimbs about why it is not mirrored from the other side.
+ */
+const LIMB_FORESHORTEN = 0.6;
+
+/* Cap on one limb's swing from its rest angle. A single bad frame must not fling an arm
+ * across the canvas, and no human joint travels much past this from a neutral pose. */
+const LIMB_DEG_MAX = 75;
+
 class Animator {
   constructor(selectionManager, motionLibrary) {
     this.sel = selectionManager;
@@ -181,6 +233,15 @@ class Animator {
     const seed = s.kind === 'svg'
       ? (s.center[0] * 0.01 + s.center[1] * 0.03)
       : (s.bounds.x * 0.01 + s.bounds.y * 0.03);
+
+    // ---- limb articulation: a pose swatch rotates each tagged limb about its joint ----
+    // First of the pose branches, because data-limb is the most specific tag of the three
+    // and a limb-rigged figure usually also carries a [data-role="body"] torso that would
+    // otherwise send it to _applyCharacter, which cannot drive arbitrary paths.
+    if (s.kind === 'svg' && this._poseFor(motion) && s.wrap.querySelector('[data-limb]')) {
+      this._applyLimbs(s, motion, rt, intensity);
+      return;
+    }
 
     // ---- wing flap: the same pose swatch drives a tagged wing pair ----
     // Checked BEFORE the character gate: wing tags are more specific than
@@ -1266,6 +1327,160 @@ class Animator {
    * the artwork data-role="wing-l" / "wing-r", and optionally "wing-body" to pin the
    * pivot reference and take the body bob; without it the region's own centre is used.
    */
+  /*
+   * LIMB ARTICULATION from a captured pose — real per-limb motion on path-based artwork.
+   *
+   * The existing character rig (_applyCharacter) can only drive the procedural duck/bear
+   * scenes: it rewrites <polygon points> and circle cx/cy, so arbitrary Illustrator paths
+   * have nothing for it to move, and its puppet fallback bobs the whole figure as one
+   * piece. This drives the artwork the artist actually drew: tag each limb group
+   * data-limb="arm-r" (etc.) and it rotates about its joint by the angle THAT BONE makes
+   * in the capture, frame for frame.
+   *
+   * Rotation is a DELTA from the bone's rest angle (the circular mean over the clip), not
+   * the absolute angle, so the pose the artist drew is the neutral: a boy drawn with his
+   * arms up stays arms-up and the capture swings them around that. Absolute angles would
+   * snap the artwork into the subject's stance on the first frame and throw the drawing
+   * away.
+   *
+   * UNLIKE _applyWings, the measured amplitude is NOT normalised away. Wings map the
+   * clip's range onto a fixed sweep on purpose; here the whole point is the subject's own
+   * articulation, so a small movement stays small. Only LIMB_DEG_MAX clamps it.
+   *
+   * Two gates, both measurements rather than guesses (LIMB_VIS_OK, LIMB_FORESHORTEN). A
+   * gated frame HOLDS the previous good angle rather than snapping to rest, so occlusion
+   * reads as a pause and not as a twitch. A limb with no usable frame at all never moves.
+   *
+   * It is deliberately NOT mirrored from the opposite limb when a side is occluded. The
+   * shipped walk has no usable left arm, and filling it in from the right one with a
+   * half-period offset would look better while being invented — this tool exists to show
+   * motion that was actually measured, so an unmeasured limb stays still.
+   */
+  _applyLimbs(s, motion, t, intensity) {
+    const wrap = s.wrap;
+    if (!s._limb || s._limbMotion !== motion.id) {
+      const pose = this._poseFor(motion);
+      const frames = pose.frames.filter(Boolean);
+      const jn = {}; pose.joints.forEach((n, i) => jn[n] = i);
+      // '@sho' / '@hip' are midpoints, so head and torso use the same bone-angle path
+      const jointAt = (f, name) => {
+        if (name === '@sho' || name === '@hip') {
+          const l = f[jn[name === '@sho' ? 'l_sho' : 'l_hip']];
+          const r = f[jn[name === '@sho' ? 'r_sho' : 'r_hip']];
+          if (!l || !r) return null;
+          return [(l[0] + r[0]) / 2, (l[1] + r[1]) / 2, Math.min(l[2], r[2])];
+        }
+        const i = jn[name];
+        return i == null ? null : f[i];
+      };
+
+      const bbOf = el => { try { return el.getBBox(); } catch (_) { return null; } };
+      const pivotAttr = (el) => {
+        const v = el && el.dataset && el.dataset.pivot;
+        if (!v) return null;
+        const m = v.trim().split(/[\s,]+/).map(Number);
+        return (m.length === 2 && m.every(Number.isFinite)) ? [m[0], m[1]] : null;
+      };
+
+      // Body reference for inferring an undeclared joint: the tagged torso if there is
+      // one, else the whole region's centre.
+      const torsoEl = wrap.querySelector('[data-limb="torso"]');
+      const fb = bbOf(wrap) || { x: 0, y: 0, width: 1, height: 1 };
+      const tb = (torsoEl && bbOf(torsoEl)) || fb;
+      const bodyC = [tb.x + tb.width / 2, tb.y + tb.height / 2];
+
+      const limbs = [];
+      for (const el of wrap.querySelectorAll('[data-limb]')) {
+        const role = el.dataset.limb;
+        const bone = LIMB_BONES[role];
+        const b = bbOf(el);
+        if (!bone || !b) continue;                      // unknown role: leave it alone
+
+        // ---- the bone's angle track, with both gates ----
+        const lens = [], angs = [];
+        for (const f of frames) {
+          const p = jointAt(f, bone[0]), q = jointAt(f, bone[1]);
+          if (!p || !q) { lens.push(null); angs.push(null); continue; }
+          const L = Math.hypot(q[0] - p[0], q[1] - p[1]);
+          lens.push(Math.min(p[2], q[2]) >= LIMB_VIS_OK ? L : null);
+          angs.push(Math.atan2(q[1] - p[1], q[0] - p[0]));
+        }
+        const seen = lens.filter(v => v != null).sort((x, y) => x - y);
+        const medLen = seen.length ? seen[Math.floor(seen.length / 2)] : 0;
+        const ok = lens.map((L, i) => L != null && L >= LIMB_FORESHORTEN * medLen && angs[i] != null);
+
+        // Rest angle as a CIRCULAR mean — a plain average of atan2 output is wrong the
+        // moment a bone's angle straddles +/-180deg, which any raised arm can.
+        let sx = 0, sy = 0, nOk = 0;
+        for (let i = 0; i < angs.length; i++) {
+          if (!ok[i]) continue;
+          sx += Math.cos(angs[i]); sy += Math.sin(angs[i]); nOk++;
+        }
+        const rest = nOk ? Math.atan2(sy, sx) : 0;
+
+        // Deltas, shortest arc, clamped; a gated frame holds the previous good value.
+        const track = []; let held = 0;
+        for (let i = 0; i < angs.length; i++) {
+          if (ok[i]) {
+            let d = (angs[i] - rest) * 180 / Math.PI;
+            d = ((d + 180) % 360 + 360) % 360 - 180;     // -180..180, sign preserved
+            held = Math.max(-LIMB_DEG_MAX, Math.min(LIMB_DEG_MAX, d));
+          }
+          track.push(held);
+        }
+
+        // The joint: declared pivot wins. data-pivot is in the limb's OWN user space —
+        // the same space getBBox() reports, and the space the rotate() below acts in,
+        // since the artwork's own transform is applied outside it. For an Illustrator
+        // export whose groups carry no transform that is just the root viewBox.
+        // Otherwise clamp the body centre into this
+
+        // limb's own box — a limb reaches AWAY from the body, so that lands on the edge
+        // where it attaches (the same trick _applyWings uses for a wing root).
+        const pv = pivotAttr(el);
+        if (el.dataset.limbNeutral == null) el.dataset.limbNeutral = el.getAttribute('transform') || '';
+        limbs.push({
+          el, role, neutral: el.dataset.limbNeutral, track,
+          usable: nOk, frames: frames.length,
+          px: pv ? pv[0] : Math.max(b.x, Math.min(b.x + b.width, bodyC[0])),
+          py: pv ? pv[1] : Math.max(b.y, Math.min(b.y + b.height, bodyC[1])),
+          declared: !!pv,
+        });
+      }
+      // Hang each limb off its parent (LIMB_PARENT). Ancestors that the artwork did not
+      // tag are simply absent from the chain, so a partial rig degrades to a flat one
+      // instead of failing.
+      const byRole = new Map(limbs.map(g => [g.role, g]));
+      for (const g of limbs) {
+        g.chain = [];
+        for (let r = LIMB_PARENT[g.role]; r; r = LIMB_PARENT[r]) {
+          const p = byRole.get(r);
+          if (p) g.chain.push(p);
+        }
+      }
+      s._limb = { limbs, fps: pose.fps || 15, n: frames.length };
+      s._limbMotion = motion.id;
+    }
+
+    const L = s._limb;
+    if (!L.n || !L.limbs.length) return;
+    const fi = Math.floor((t * L.fps) % L.n);
+    const rot = (g) => `rotate(${((g.track[fi] || 0) * intensity).toFixed(2)} ` +
+      `${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
+    for (const g of L.limbs) {
+      // SVG applies a transform list RIGHT to LEFT, so the outermost ancestor is written
+      // first and the limb's own rotation last — the limb turns about its own joint, then
+      // that whole result is carried by its parent, then by its parent's parent.
+      const ops = [];
+      for (let i = g.chain.length - 1; i >= 0; i--) ops.push(rot(g.chain[i]));
+      ops.push(rot(g));
+      g.el.setAttribute('transform', `${g.neutral ? g.neutral + ' ' : ''}${ops.join(' ')}`);
+    }
+    // The limbs carry the whole motion; the region itself must not also drift, or a
+    // route's translate would be competing with a second one written here.
+    wrap.setAttribute('transform', '');
+  }
+
   _applyWings(s, motion, t, intensity) {
     const wrap = s.wrap;
     if (!s._wing || s._wingMotion !== motion.id) {
@@ -1490,6 +1705,23 @@ class Animator {
         if (o.cy != null) o.el.setAttribute('cy', o.cy);
       }
       s._char = null; s._charMotion = null;
+    }
+    // Limb rig: put back the transform the ARTWORK carried, not nothing — an Illustrator
+    // group may legitimately have its own transform, and removing it would move the limb.
+    if (s._limb) {
+      for (const g of s._limb.limbs) {
+        if (g.neutral) g.el.setAttribute('transform', g.neutral);
+        else g.el.removeAttribute('transform');
+      }
+      s._limb = null; s._limbMotion = null;
+    }
+    // Same for wings, which previously kept their last rotation after a stop.
+    if (s._wing) {
+      for (const g of [...s._wing.wings, ...s._wing.bodies]) {
+        if (g.neutral) g.el.setAttribute('transform', g.neutral);
+        else g.el.removeAttribute('transform');
+      }
+      s._wing = null; s._wingMotion = null;
     }
     if (s._birds) { for (const bd of s._birds) { bd.el.removeAttribute('transform'); bd.el.style.opacity = ''; } s._birds = null; s._birdsMotion = null; }
     if (s._clouds) { for (const cd of s._clouds) cd.el.removeAttribute('transform'); s._clouds = null; s._cloudsMotion = null; }

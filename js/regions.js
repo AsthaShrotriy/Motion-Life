@@ -277,7 +277,11 @@ class SelectionManager {
    */
   _hasRig(el) {
     return !!(el.querySelector && el.querySelector(
-      '[data-role], [data-motion-mode="character"], [data-char-mode], [data-leg], [data-cloth]'));
+      // data-limb belongs here for the same reason: a figure whose arms and legs are
+      // tagged is one rig. Drill into it and each limb becomes its own selection with no
+      // torso to hinge against, so the limb applicator loses the joint it rotates about.
+      '[data-role], [data-motion-mode="character"], [data-char-mode], [data-leg], ' +
+      '[data-cloth], [data-limb]'));
   }
 
   /* fraction of the SVG canvas an element's bbox covers (0..1) */
