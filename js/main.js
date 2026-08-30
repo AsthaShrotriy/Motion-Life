@@ -484,9 +484,33 @@ function showInspector(s) {
     badge.textContent = m ? m.name : 'Unknown';
     badge.classList.add('assigned');
   } else { badge.textContent = 'None — select a motion'; badge.classList.remove('assigned'); }
+  showRetarget(s);
   showRoute(s);
   markLayerActive(s.wrap);
   showJudge(s);
+}
+
+/*
+ * Rest-pose control. Only meaningful for a limb-rigged figure, so it stays hidden otherwise
+ * rather than offering a dial that does nothing.
+ *
+ * "Keep the pose as drawn" adds the capture's per-frame delta on top of the artwork's own
+ * stance. That is right when the drawing already stands like the clip, and wrong when it does
+ * not: the reference boy is drawn mid-jump with his legs 56.8deg apart while the walking man's
+ * rest 2.7deg apart, so his feet never pass each other no matter how far Intensity is pushed.
+ * Matching the capture aligns each limb's rest to the bone's measured rest first — the drawing
+ * keeps its art and proportions and adopts the subject's stance. See LIMB_RETARGET_DEFAULT.
+ */
+function showRetarget(s) {
+  const row = $('insp-retarget-row');
+  const limbs = s.wrap.querySelectorAll('[data-limb]').length;
+  row.hidden = !limbs;
+  if (!limbs) return;
+  // resolved exactly as _applyLimbs does, so the control cannot show a mode that is not in use
+  $('insp-retarget').value = s.limbRetarget || s.wrap.dataset.retarget || LIMB_RETARGET_DEFAULT;
+  $('insp-retarget-hint').textContent = limbs + (limbs === 1 ? ' rigged limb' : ' rigged limbs')
+    + ' · matching the capture moves the drawn stance; keeping it as drawn preserves the pose'
+    + ' but also preserves any splay the motion is too small to close.';
 }
 
 /*
@@ -659,6 +683,14 @@ function markLayerActive(wrap) {
 $('insp-name').addEventListener('change', () => { const s = sel.getActive(); if (s) { s.name = $('insp-name').value; renderChips(); if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw(); } });
 $('insp-speed').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.speed = parseFloat($('insp-speed').value); $('insp-speed-val').textContent = s.speed.toFixed(1) + 'x'; } });
 $('insp-intensity').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.intensity = parseFloat($('insp-intensity').value); $('insp-intensity-val').textContent = Math.round(s.intensity * 100) + '%'; } });
+$('insp-retarget').addEventListener('change', () => {
+  const s = sel.getActive();
+  if (!s) return;
+  s.limbRetarget = $('insp-retarget').value;
+  // _applyLimbs keys its cached rig on the mode, so the next animated frame rebuilds on its
+  // own. Nothing is drawn here on purpose: pause() resets the artwork to its neutral, so
+  // painting a frame now would contradict a stopped animation.
+});
 
 // ---- travel route ----
 $('btn-draw-route').addEventListener('click', () => {

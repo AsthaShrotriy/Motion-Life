@@ -89,8 +89,52 @@ const LIMB_VIS_OK = 0.5;
 const LIMB_FORESHORTEN = 0.6;
 
 /* Cap on one limb's swing from its rest angle. A single bad frame must not fling an arm
- * across the canvas, and no human joint travels much past this from a neutral pose. */
+ * across the canvas, and no human joint travels much past this from a neutral pose.
+ * It caps the MOTION only — a retarget offset (see LIMB_RETARGET_DEFAULT) is a one-off
+ * rest alignment, not a swing, and capping it would just half-apply the alignment. */
 const LIMB_DEG_MAX = 75;
+
+/*
+ * REST RETARGETING — whether the artwork's drawn pose or the capture's stance is the neutral.
+ *
+ * 'off' adds the capture's per-frame delta on top of the pose as drawn. That keeps the
+ * artwork intact and is the right default for a drawing whose stance already resembles the
+ * clip's, but it also keeps any stance that does NOT: measured on assets/scenes/boy-limbs.svg
+ * driven by assets/motion/walk-man-extracted.json, the boy is drawn in a star jump with his
+ * legs 58.3deg / 115.1deg apart (a 56.8deg splay) while the walking man's thighs rest 2.7deg
+ * apart (93.1deg / 90.4deg as the rig reads them). Closing that takes +39.5deg on one leg and
+ * -20deg on the other, and the walk supplies only 26.1deg / 28.6deg peak to peak, i.e. about
+ * +-13deg from rest — so the feet never pass each other at any usable intensity. The crossing
+ * IS in the capture (the man's ankles swap sides 6 times in 155 frames); it just cannot
+ * survive being added to a splay several times its own size.
+ *
+ * 'all' aligns every usable limb's rest to the bone's captured rest first, then adds the
+ * delta — standard retargeting. The drawing keeps its proportions and its art; it adopts the
+ * subject's stance. 'legs' does the same for the leg and shin roles only, leaving arms, head
+ * and torso as drawn. tests/boy_foot_cross.js, signed foot gap in screen px over 155 frames:
+ *
+ *   intensity   'off'                  'all'
+ *   1           125..223  no crossing   -27.4..83.2  crosses 4x
+ *   2           63.3..258 no crossing   -87.2..129   crosses 6x
+ *   3           2.7..287  no crossing   —
+ *
+ * Intensity 3 is the end of the honest range: 26deg of measured swing scaled by 3 is 78deg,
+ * past LIMB_DEG_MAX, so the clamp starts flattening the stride. 'off' gets within 2.7px of a
+ * crossing there and still does not make one.
+ *
+ * A limb with no usable frame is never retargeted — its captured rest would be a fabrication,
+ * so it holds its drawn pose exactly as under 'off'.
+ */
+const LIMB_RETARGET_DEFAULT = 'all';         // 'off' | 'legs' | 'all'
+const LIMB_RETARGET_ROLES = /^(leg|shin)-/;  // what 'legs' covers
+
+/* How finely a limb's paths are sampled to find its drawn far end (the foot, the hand).
+ * Measured against a 32x denser sweep (2048/subpath) on all six of the reference boy's limbs,
+ * 64 is within 0.35deg on the worst of them — and it runs once per selection, not per frame. */
+const LIMB_TIP_SAMPLES = 64;
+
+/* Shortest-arc normalisation to -180..180, sign preserved. */
+const deg180 = (d) => ((d + 180) % 360 + 360) % 360 - 180;
 
 class Animator {
   constructor(selectionManager, motionLibrary) {
@@ -1358,7 +1402,8 @@ class Animator {
    */
   _applyLimbs(s, motion, t, intensity) {
     const wrap = s.wrap;
-    if (!s._limb || s._limbMotion !== motion.id) {
+    const mode = s.limbRetarget || wrap.dataset.retarget || LIMB_RETARGET_DEFAULT;
+    if (!s._limb || s._limbMotion !== motion.id || s._limbRetarget !== mode) {
       const pose = this._poseFor(motion);
       const frames = pose.frames.filter(Boolean);
       const jn = {}; pose.joints.forEach((n, i) => jn[n] = i);
@@ -1380,6 +1425,66 @@ class Animator {
         if (!v) return null;
         const m = v.trim().split(/[\s,]+/).map(Number);
         return (m.length === 2 && m.every(Number.isFinite)) ? [m[0], m[1]] : null;
+      };
+
+      /*
+       * WHICH WAY IS THE CAPTURE FACING, AND WHICH WAY IS THE ARTWORK DRAWN?
+       *
+       * MediaPipe labels landmarks by the SUBJECT's own left and right, so the horizontal
+       * arrangement flips with the camera: filmed from behind, the anatomical left hip sits
+       * at LOWER x, while a figure drawn facing the viewer has its anatomical left limb at
+       * HIGHER x. Matching role-to-role without reconciling that mirrors every horizontal
+       * component — the frames where the subject's feet converge push the artwork's apart.
+       * Measured on walk-man.mp4 (a man walking AWAY) driving the boy (drawn FACING us):
+       * capture hip dx -0.115 against the boy's leg pivots 737 vs 500, i.e. opposite signs.
+       *
+       * Mirroring the capture in x maps a bone direction (dx,dy) -> (-dx,dy), so an angle
+       * becomes 180-angle and a delta simply negates. Antiphase survives (both sides negate),
+       * so this changes WHICH leg leads, not whether they alternate.
+       */
+      const medianDx = (a, b) => {
+        const v = [];
+        for (const f of frames) {
+          const p = jointAt(f, a), q = jointAt(f, b);
+          if (p && q && Math.min(p[2], q[2]) >= LIMB_VIS_OK) v.push(p[0] - q[0]);
+        }
+        if (!v.length) return 0;
+        v.sort((x, y) => x - y);
+        return v[Math.floor(v.length / 2)];
+      };
+      const capSide = medianDx('l_hip', 'r_hip');
+
+      /*
+       * The direction the limb is DRAWN in: its joint to its far end. Needed for retargeting,
+       * which has to know what it is rotating FROM.
+       *
+       * The far end is the sampled path point farthest from the pivot, not the bbox
+       * bottom-centre. A leg drawn on a diagonal has its foot at a bbox CORNER, and reading
+       * the bottom-centre instead put this boy's feet 5.3x closer together than they are —
+       * which is how a "crosses at intensity 2" measurement survived that was not crossing.
+       */
+      const drawnDeg = (el, px, py) => {
+        let best = null, bd = -1;
+        const take = (x, y) => {
+          const d = Math.hypot(x - px, y - py);
+          if (d > bd) { bd = d; best = { x, y }; }
+        };
+        for (const p of el.querySelectorAll('path,polygon,rect,circle,ellipse')) {
+          let n = 0;
+          try { n = p.getTotalLength ? p.getTotalLength() : 0; } catch (_) { n = 0; }
+          if (!(n > 0)) continue;
+          for (let k = 0; k <= LIMB_TIP_SAMPLES; k++) {
+            let q; try { q = p.getPointAtLength(n * k / LIMB_TIP_SAMPLES); } catch (_) { continue; }
+            take(q.x, q.y);
+          }
+        }
+        if (!best) {                                  // nothing measurable: bbox corners
+          const b = bbOf(el);
+          if (!b) return null;
+          take(b.x, b.y); take(b.x + b.width, b.y);
+          take(b.x, b.y + b.height); take(b.x + b.width, b.y + b.height);
+        }
+        return best ? Math.atan2(best.y - py, best.x - px) * 180 / Math.PI : null;
       };
 
       // Body reference for inferring an undeclared joint: the tagged torso if there is
@@ -1438,12 +1543,13 @@ class Animator {
         // where it attaches (the same trick _applyWings uses for a wing root).
         const pv = pivotAttr(el);
         if (el.dataset.limbNeutral == null) el.dataset.limbNeutral = el.getAttribute('transform') || '';
+        const px = pv ? pv[0] : Math.max(b.x, Math.min(b.x + b.width, bodyC[0]));
+        const py = pv ? pv[1] : Math.max(b.y, Math.min(b.y + b.height, bodyC[1]));
         limbs.push({
           el, role, neutral: el.dataset.limbNeutral, track,
-          usable: nOk, frames: frames.length,
-          px: pv ? pv[0] : Math.max(b.x, Math.min(b.x + b.width, bodyC[0])),
-          py: pv ? pv[1] : Math.max(b.y, Math.min(b.y + b.height, bodyC[1])),
-          declared: !!pv,
+          usable: nOk, frames: frames.length, px, py, declared: !!pv,
+          restDeg: rest * 180 / Math.PI,               // the bone's captured rest, unmirrored
+          drawn: drawnDeg(el, px, py),                 // where the artwork points it
         });
       }
       // Hang each limb off its parent (LIMB_PARENT). Ancestors that the artwork did not
@@ -1457,8 +1563,35 @@ class Animator {
           if (p) g.chain.push(p);
         }
       }
-      s._limb = { limbs, fps: pose.fps || 15, n: frames.length };
+
+      // Now that the pivots exist, the artwork's facing can be read off them and compared
+      // with the capture's (see the medianDx note). Prefer the legs, fall back to the arms —
+      // a rig may tag only one pair.
+      const sideOf = (l, r) => {
+        const a = byRole.get(l), b2 = byRole.get(r);
+        return (a && b2) ? a.px - b2.px : 0;
+      };
+      const artSide = sideOf('leg-l', 'leg-r') || sideOf('arm-l', 'arm-r');
+      const mirror = capSide * artSide < 0;
+      if (mirror) {
+        for (const g of limbs) {
+          g.restDeg = deg180(180 - g.restDeg);
+          for (let i = 0; i < g.track.length; i++) g.track[i] = -g.track[i];
+        }
+      }
+
+      /* Retarget only where there is something real to retarget to. A limb with no usable
+       * frame has a rest angle of 0 that means "we never saw this bone", and rotating the
+       * drawing to it would be an invention; it holds its drawn pose instead. Resolve
+       * parents before children (shorter chain first) so a child can subtract what its
+       * ancestors already contribute. */
+      const wanted = (role) => mode === 'all' || (mode === 'legs' && LIMB_RETARGET_ROLES.test(role));
+      for (const g of limbs) g.retarget = !!(g.usable && g.drawn != null && wanted(g.role));
+      const order = [...limbs].sort((a, b) => a.chain.length - b.chain.length);
+
+      s._limb = { limbs, order, fps: pose.fps || 15, n: frames.length, mirror, mode };
       s._limbMotion = motion.id;
+      s._limbRetarget = mode;
     }
 
     const L = s._limb;
@@ -1469,11 +1602,28 @@ class Animator {
     // the head's largest raw delta is +28.2deg, which passes a raw clamp untouched and then
     // becomes 112.8deg at intensity 4. Clamping last holds it at exactly 75deg, so the cap
     // is a guarantee at every intensity rather than only at 1.
-    const rot = (g) => {
-      const d = Math.max(-LIMB_DEG_MAX,
-        Math.min(LIMB_DEG_MAX, (g.track[fi] || 0) * intensity));
-      return `rotate(${d.toFixed(2)} ${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
-    };
+    const swing = (g) => Math.max(-LIMB_DEG_MAX,
+      Math.min(LIMB_DEG_MAX, (g.track[fi] || 0) * intensity));
+
+    /*
+     * Each limb's own rotation for this frame, ancestors first.
+     *
+     * Without retargeting this is just the clamped swing, byte for byte what it always was.
+     *
+     * With it, the limb has to END UP along the captured bone, so what it owes is the target
+     * minus where the drawing already points it MINUS whatever its ancestors are about to
+     * contribute — a child rides its parent (see the chain note below), and a captured bone
+     * angle is measured in the frame, so it already contains the parent's motion. Subtracting
+     * the ancestors is what stops that being applied twice.
+     */
+    const own = new Map();
+    for (const g of L.order) {
+      if (!g.retarget) { own.set(g, swing(g)); continue; }
+      let acc = 0;
+      for (const p of g.chain) acc += own.get(p) || 0;
+      own.set(g, deg180(g.restDeg + swing(g) - g.drawn - acc));
+    }
+    const rot = (g) => `rotate(${(own.get(g) || 0).toFixed(2)} ${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
     for (const g of L.limbs) {
       // SVG applies a transform list RIGHT to LEFT, so the outermost ancestor is written
       // first and the limb's own rotation last — the limb turns about its own joint, then
@@ -1720,7 +1870,7 @@ class Animator {
         if (g.neutral) g.el.setAttribute('transform', g.neutral);
         else g.el.removeAttribute('transform');
       }
-      s._limb = null; s._limbMotion = null;
+      s._limb = null; s._limbMotion = null; s._limbRetarget = null;
     }
     // Same for wings, which previously kept their last rotation after a stop.
     if (s._wing) {

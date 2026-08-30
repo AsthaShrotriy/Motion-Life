@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <script>(function(){var t=localStorage.getItem('ml-theme')||'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
-<link rel="stylesheet" href="css/style.css?v=67">
+<link rel="stylesheet" href="css/style.css?v=68">
 </head>
 <body>
 <header>
@@ -93,6 +93,15 @@
             <label>Intensity <span id="insp-intensity-val">100%</span></label>
             <input type="range" id="insp-intensity" min="0" max="2" step="0.05" value="1">
           </div>
+          <div class="insp-row" id="insp-retarget-row" hidden>
+            <label>Rest pose</label>
+            <select id="insp-retarget">
+              <option value="all">Match the capture (whole figure)</option>
+              <option value="legs">Match the capture (legs only)</option>
+              <option value="off">Keep the pose as drawn</option>
+            </select>
+            <p class="insp-hint" id="insp-retarget-hint"></p>
+          </div>
           <div class="insp-row">
             <label>Travel route <span id="insp-route-val">none</span></label>
             <div class="insp-actions">
@@ -143,23 +152,23 @@
 
 <button id="theme-toggle" class="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">☀️</button>
 
-<script src="js/flow.js?v=67"></script>
-<script src="js/distill.js?v=67"></script>
-<script src="js/motions.js?v=67"></script>
-<script src="js/scenery.js?v=67"></script>
-<script src="js/poster.js?v=67"></script>
-<script src="js/regions.js?v=67"></script>
-<script src="js/motionfields.js?v=67"></script>
-<script src="js/animate.js?v=67"></script>
-<script src="js/export.js?v=67"></script>
-<script src="js/videoexport.js?v=67"></script>
-<script src="js/extractviz.js?v=67"></script>
-<script src="js/multipick.js?v=67"></script>
-<script src="js/skeletonviz.js?v=67"></script>
-<script src="js/capture.js?v=67"></script>
-<script src="js/autolabel.js?v=67"></script>
-<script src="js/judge.js?v=67"></script>
-<script src="js/upload.js?v=67"></script>
-<script src="js/main.js?v=67"></script>
+<script src="js/flow.js?v=68"></script>
+<script src="js/distill.js?v=68"></script>
+<script src="js/motions.js?v=68"></script>
+<script src="js/scenery.js?v=68"></script>
+<script src="js/poster.js?v=68"></script>
+<script src="js/regions.js?v=68"></script>
+<script src="js/motionfields.js?v=68"></script>
+<script src="js/animate.js?v=68"></script>
+<script src="js/export.js?v=68"></script>
+<script src="js/videoexport.js?v=68"></script>
+<script src="js/extractviz.js?v=68"></script>
+<script src="js/multipick.js?v=68"></script>
+<script src="js/skeletonviz.js?v=68"></script>
+<script src="js/capture.js?v=68"></script>
+<script src="js/autolabel.js?v=68"></script>
+<script src="js/judge.js?v=68"></script>
+<script src="js/upload.js?v=68"></script>
+<script src="js/main.js?v=68"></script>
 </body>
 </html>
