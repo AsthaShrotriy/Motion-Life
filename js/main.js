@@ -180,8 +180,11 @@ function chipLoop() {
       ctx.fillStyle = '#0e1420'; ctx.fillRect(0, 0, S, S);
       const n = pose.frames.length;
       const fi = Math.floor(t * pose.fps) % n;
+      // pad was S*0.17 — 34% of the tile was margin, so a standing figure (which
+      // only fills ~81% of its own normalized box on the tall axis) rendered at
+      // barely half the tile height. 0.06 keeps the joint dots off the edge.
       window.drawSkeletonFrame(ctx, pose.frames[fi], pose.joints, S, S,
-        { pad: S * 0.17, color: motion.color || '#34d399', lineWidth: Math.max(2, S * 0.02), jointR: Math.max(2, S * 0.02) });
+        { pad: S * 0.06, color: motion.color || '#34d399', lineWidth: Math.max(2, S * 0.02), jointR: Math.max(2, S * 0.02) });
       continue;
     }
 
@@ -481,8 +484,33 @@ function showInspector(s) {
     badge.textContent = m ? m.name : 'Unknown';
     badge.classList.add('assigned');
   } else { badge.textContent = 'None — select a motion'; badge.classList.remove('assigned'); }
+  showRoute(s);
   markLayerActive(s.wrap);
   showJudge(s);
+}
+
+/*
+ * Travel-route controls. A route is AUTHORED — hand-drawn points, not measured motion —
+ * so the label says so plainly rather than sitting next to the extracted swatches as if it
+ * came out of a video.
+ */
+function showRoute(s) {
+  const val = $('insp-route-val'), row = $('insp-route-dur-row');
+  const drawing = sel.routing && sel.routing.sel === s;
+  if (drawing) {
+    val.textContent = `drawing — ${sel.routing.pts.length} pts, double-click to finish`;
+  } else if (s.route) {
+    val.textContent = `authored, ${s.route.pts.length} pts`;
+  } else {
+    val.textContent = 'none';
+  }
+  row.hidden = !s.route;
+  if (s.route) {
+    $('insp-route-dur').value = s.route.duration;
+    $('insp-route-dur-val').textContent = s.route.duration.toFixed(1) + 's';
+  }
+  $('btn-draw-route').textContent = drawing ? 'Finish route' : (s.route ? 'Redraw route' : 'Draw route');
+  $('btn-clear-route').disabled = !s.route;
 }
 function hideInspector() { $('inspector-section').hidden = true; $('inspector-content').hidden = true; markLayerActive(null); showJudge(null); }
 
@@ -618,6 +646,43 @@ function markLayerActive(wrap) {
 $('insp-name').addEventListener('change', () => { const s = sel.getActive(); if (s) { s.name = $('insp-name').value; renderChips(); if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw(); } });
 $('insp-speed').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.speed = parseFloat($('insp-speed').value); $('insp-speed-val').textContent = s.speed.toFixed(1) + 'x'; } });
 $('insp-intensity').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.intensity = parseFloat($('insp-intensity').value); $('insp-intensity-val').textContent = Math.round(s.intensity * 100) + '%'; } });
+
+// ---- travel route ----
+$('btn-draw-route').addEventListener('click', () => {
+  const s = sel.getActive();
+  if (!s) return;
+  if (sel.routing) {
+    const ok = sel.endRoute(true);
+    status(ok ? `Route saved on "${s.name}" — press Play to send it along.`
+              : 'Route needs at least one destination point.');
+  } else if (sel.beginRoute()) {
+    status(`Click across the canvas to lay out where "${s.name}" travels. ` +
+           'Double-click to finish, Esc to cancel.');
+  }
+  showRoute(s);
+});
+$('btn-clear-route').addEventListener('click', () => {
+  const s = sel.getActive();
+  if (!s) return;
+  sel.clearRoute(s);
+  status(`Travel route removed from "${s.name}".`);
+  showRoute(s);
+});
+$('insp-route-dur').addEventListener('input', () => {
+  const s = sel.getActive();
+  if (!s || !s.route) return;
+  s.route.duration = parseFloat($('insp-route-dur').value);
+  $('insp-route-dur-val').textContent = s.route.duration.toFixed(1) + 's';
+});
+// Esc abandons a route in progress; the previously saved one (if any) is left alone
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !sel.routing) return;
+  const s = sel.routing.sel;
+  sel.endRoute(false);
+  status('Route cancelled.');
+  showRoute(s);
+});
+sel.onRouteChange = () => { const s = sel.getActive(); if (s) showRoute(s); };
 $('btn-remove-motion').onclick = () => {
   const s = sel.getActive();
   if (!s) return;
@@ -985,6 +1050,14 @@ if (canvasWrap) {
   });
 }
 
+/*
+ * Motions extracted OFFLINE and shipped with the repo (tools/extract_cloth_flutter.py).
+ *
+ * They are `fromUpload: true` like anything captured in-session, because that is what
+ * they are — measured from a video, not a hand-authored preset — and the Extracted
+ * Motion panel is where a user looks for real motion. Failing to load one must not
+ * take the app down with it, so a miss is reported to the status line and skipped.
+ */
 renderMotionList();
 loadBlank();
 

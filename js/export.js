@@ -24,8 +24,13 @@ function buildExportSVG(sel, motions) {
   animated.forEach(s => s.wrap.removeAttribute('data-ms-export'));
 
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  const hl = clone.querySelector('#ms-highlights');
-  if (hl) hl.remove();
+  // Strip every editor overlay. #ms-routes is a SEPARATE layer from #ms-highlights (it has
+  // to be — highlights are torn down on each hover), so removing only the highlights baked
+  // the dashed travel guide into the artwork as if it were part of the drawing.
+  for (const id of ['#ms-highlights', '#ms-routes']) {
+    const layer = clone.querySelector(id);
+    if (layer) layer.remove();
+  }
   clone.querySelectorAll('.ms-wrap').forEach(w => w.removeAttribute('transform'));
 
   let css = '';

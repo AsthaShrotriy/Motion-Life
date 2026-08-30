@@ -17,7 +17,8 @@
  *   center      (svg mode: [cx,cy] in viewBox units, for rotation origin),
  *   floatEl     (raster mode: the floating clone we animate),
  *   bounds      (raster mode: {x,y,w,h} in displayed px),
- *   motionId, speed, intensity
+ *   motionId, speed, intensity,
+ *   route       (optional authored travel polyline — see beginRoute())
  * }
  */
 
@@ -99,6 +100,8 @@ class SelectionManager {
     this._svgDragOverHandler = null;
     this._svgDropHandler = null;
     this.hoveredWrap = null;
+    this.routing = null;             // in-progress authored travel route, see beginRoute()
+    this.onRouteChange = null;
     this.highlightsHidden = false;   // hide selection outlines during playback
     this._initRasterEvents();
   }
@@ -118,6 +121,8 @@ class SelectionManager {
     // one delegated click handler on the svg
     if (this._svgClickHandler) svg.removeEventListener('click', this._svgClickHandler);
     this._svgClickHandler = (e) => {
+      // while drawing a travel route, clicks place route points instead of selecting
+      if (this.routing) { e.stopPropagation(); this.addRoutePoint(e); return; }
       const wrap = this.resolveWrapForTarget(e.target);
       if (!wrap) { this.deselect(); return; }
       const existing = this.selections.findIndex(s => s.wrap === wrap);
@@ -130,6 +135,7 @@ class SelectionManager {
     if (this._svgMoveHandler) svg.removeEventListener('mousemove', this._svgMoveHandler);
     if (this._svgLeaveHandler) svg.removeEventListener('mouseleave', this._svgLeaveHandler);
     this._svgMoveHandler = (e) => {
+      if (this.routing) { this.previewRoutePoint(e); return; }
       const wrap = this.resolveWrapForTarget(e.target);
       if (wrap === this.hoveredWrap) return;
       this.hoveredWrap = wrap;
@@ -159,6 +165,15 @@ class SelectionManager {
     svg.addEventListener('dragover', this._svgDragOverHandler);
     svg.addEventListener('dragleave', this._svgLeaveHandler);
     svg.addEventListener('drop', this._svgDropHandler);
+
+    // double-click finishes the route being drawn (a plain click would add one more point)
+    if (this._svgDblHandler) svg.removeEventListener('dblclick', this._svgDblHandler);
+    this._svgDblHandler = (e) => {
+      if (!this.routing) return;
+      e.preventDefault(); e.stopPropagation();
+      this.endRoute(true);
+    };
+    svg.addEventListener('dblclick', this._svgDblHandler);
     this._svg = svg;
   }
 
@@ -175,7 +190,12 @@ class SelectionManager {
     // that gives a single selection covering the whole artwork, which reads
     // as "selection is broken". If the hit wrap covers most of the canvas,
     // drill down to the actual target unit instead.
-    if (wrap && this._coverage(wrap, svg) > 0.7 && target !== wrap) {
+    //
+    // EXCEPT when the wrap carries a rig (see _hasRig): a rigged subject is one unit
+    // by the author's own declaration, and splitting it is what breaks it. A
+    // single-subject SVG (one bird filling the frame) always trips the >0.7 test, so
+    // without this guard a tagged wing pair could never end up in the same region.
+    if (wrap && this._coverage(wrap, svg) > 0.7 && target !== wrap && !this._hasRig(wrap)) {
       const unit = this._bestUnitFor(target, wrap, svg);
       if (unit && this._coverage(unit, svg) < 0.7) wrap = this._wrapOne(unit);
     }
@@ -242,6 +262,22 @@ class SelectionManager {
   _isDrawable(el) {
     const t = el.tagName ? el.tagName.toLowerCase() : '';
     return ['g', 'path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'line', 'image', 'text', 'use', 'tspan'].includes(t);
+  }
+
+  /*
+   * Does this subtree carry an explicit rig — the data-* tags js/animate.js gates its
+   * skeletal / wing / cloth applicators on?
+   *
+   * This matters for the full-canvas drill-down below. A rigged subject (a bird whose
+   * two wings must move together, a character whose legs must move with its body) is
+   * ONE semantic unit that the artwork's author already declared. Drilling into it
+   * hands the animator a single wing with no pair and no body to hinge against, so the
+   * applicator can only fall back to a generic sway — which is exactly what "the wings
+   * don't flap" looks like from the outside.
+   */
+  _hasRig(el) {
+    return !!(el.querySelector && el.querySelector(
+      '[data-role], [data-motion-mode="character"], [data-char-mode], [data-leg], [data-cloth]'));
   }
 
   /* fraction of the SVG canvas an element's bbox covers (0..1) */
@@ -327,6 +363,10 @@ class SelectionManager {
   // not every selection ever made — so the canvas doesn't stay cluttered.
   _renderSVGHighlights() {
     if (!this._svg) return;
+    // Routes follow the selection, so they are rebuilt from here — this runs on every
+    // selection change and every hover. Before the early return below, because when
+    // highlights go away the route has to go away with them.
+    this._renderRoutes();
     // remove old highlight layer
     let hl = this._svg.querySelector('#ms-highlights');
     if (hl) hl.remove();
@@ -575,6 +615,161 @@ class SelectionManager {
     if (this.onSelected) this.onSelected(this.selections[idx], idx);
   }
   getActive() { return this.activeIdx >= 0 ? this.selections[this.activeIdx] : null; }
+
+  /* ==== authored travel routes ==========================================================
+   *
+   * A route is a polyline drawn across the artwork saying where one selection should
+   * travel. It is stored ON THE SELECTION, not on the motion swatch: a swatch is meant to
+   * be reusable on any artwork, while "fly from her hand out over the lake" only means
+   * anything in this one scene. Two selections can therefore share one flutter swatch and
+   * still travel to different places.
+   *
+   * `authored: true` is set here and never removed. Routes are hand-placed points, not
+   * measurements, and nothing downstream may present them as extracted motion — the
+   * animator keeps them on a separate code path from _applyPathTravel for exactly that
+   * reason.
+   */
+  beginRoute() {
+    const s = this.getActive();
+    if (!s || this.mode !== 'svg' || !this._svg) return false;
+    // seed the route at the object's own centre so the first click is a destination,
+    // not a starting point the user has to hit exactly
+    this.routing = { sel: s, pts: [[s.center[0], s.center[1]]] };
+    this._renderRoutes();
+    if (this.onRouteChange) this.onRouteChange(this.routing);
+    return true;
+  }
+
+  /* client coords -> the svg's own viewBox units, which is what routes are stored in */
+  _toViewBox(e) {
+    const svg = this._svg, m = svg.getScreenCTM();
+    if (!m) return null;
+    const p = svg.createSVGPoint();
+    p.x = e.clientX; p.y = e.clientY;
+    const q = p.matrixTransform(m.inverse());
+    return [q.x, q.y];
+  }
+
+  /*
+   * A route point, clamped to the canvas.
+   *
+   * The svg has no preserveAspectRatio, so the default xMidYMid meet letterboxes the
+   * artwork inside whatever box CSS gives it — on a short wide window Scene3 fits to
+   * HEIGHT and occupies only about a quarter of the element's width, centred. Clicks in
+   * that empty margin are still inside the svg element and map to viewBox coordinates far
+   * outside the artwork (a click at the element's left edge measured x = -1098 on a
+   * 757.88-wide viewBox). Left unclamped they produce a route leg drawn where nothing is
+   * visible, so the object appears to simply vanish and the guide gives no clue why.
+   *
+   * Clamping here rather than at playback time keeps the drawn guide honest: the polyline
+   * you see is exactly the path the object takes. Reaching the very edge of the frame is
+   * still possible, which is as far as "it blows away" needs to go.
+   */
+  _toRoutePoint(e) {
+    const p = this._toViewBox(e);
+    if (!p) return null;
+    const vb = this._svg.viewBox.baseVal;
+    if (!vb || !vb.width || !vb.height) return p;   // no viewBox: nothing to clamp against
+    return [Math.min(Math.max(p[0], vb.x), vb.x + vb.width),
+            Math.min(Math.max(p[1], vb.y), vb.y + vb.height)];
+  }
+
+  addRoutePoint(e) {
+    if (!this.routing) return false;
+    const p = this._toRoutePoint(e);
+    if (!p) return false;
+    this.routing.pts.push(p);
+    this._renderRoutes();
+    if (this.onRouteChange) this.onRouteChange(this.routing);
+    return true;
+  }
+
+  /* live rubber band from the last placed point to the cursor */
+  previewRoutePoint(e) {
+    if (!this.routing) return;
+    this.routing.hover = this._toRoutePoint(e);   // same clamp, so the band shows the truth
+    this._renderRoutes();
+  }
+
+  endRoute(commit) {
+    const r = this.routing;
+    this.routing = null;
+    if (commit && r && r.pts.length >= 2) {
+      r.sel.route = {
+        pts: r.pts,
+        authored: true,          // hand-drawn, NOT measured — see the note above
+        duration: 4.0,
+        rev: Date.now(),         // bumped on every edit so the animator rebuilds its table
+      };
+      r.sel._routeTbl = null;
+    }
+    this._renderRoutes();
+    if (this.onRouteChange) this.onRouteChange(null);
+    return !!(commit && r && r.pts.length >= 2);
+  }
+
+  clearRoute(sel) {
+    const s = sel || this.getActive();
+    if (!s) return;
+    s.route = null;
+    s._routeTbl = null;
+    this._renderRoutes();
+  }
+
+  /* Routes get their OWN overlay layer. #ms-highlights is torn down and rebuilt on every
+     hover, which would take the route with it. pointer-events none so the guide never
+     eats a click meant for the artwork underneath.
+
+     Only the ACTIVE selection's route is drawn, and only while it is selected — same rule
+     as the highlight outline just above. The guide is authoring chrome: once a route is
+     committed the line has served its purpose, and leaving every route on screen would
+     cover the artwork with dashes belonging to objects the user isn't working on. Select
+     the object again to see where it travels. A route being drawn right now always shows,
+     since you cannot place points blind. */
+  _renderRoutes() {
+    if (!this._svg) return;
+    const old = this._svg.querySelector('#ms-routes');
+    if (old) old.remove();
+    const draw = [];
+    if (this.routing) {
+      const pts = this.routing.hover ? this.routing.pts.concat([this.routing.hover]) : this.routing.pts;
+      draw.push({ pts, color: this.routing.sel.color, live: true });
+    } else if (!this.highlightsHidden) {
+      const a = this.getActive();
+      if (a && a.route) draw.push({ pts: a.route.pts, color: a.color, live: false });
+    }
+    if (!draw.length) return;
+
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('id', 'ms-routes');
+    g.setAttribute('pointer-events', 'none');
+    this._svg.appendChild(g);
+    for (const r of draw) {
+      const pts = r.pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+      // white halo under the coloured line, same trick the selection hatch uses, so the
+      // route stays legible over any artwork
+      for (const [stroke, w, dash] of [['#fff', 4.5, null], [r.color, 2, r.live ? '6 4' : '9 5']]) {
+        const pl = document.createElementNS(SVGNS, 'polyline');
+        pl.setAttribute('points', pts);
+        pl.setAttribute('fill', 'none');
+        pl.setAttribute('stroke', stroke);
+        pl.setAttribute('stroke-width', w);
+        pl.setAttribute('stroke-linejoin', 'round');
+        if (dash) pl.setAttribute('stroke-dasharray', dash);
+        pl.setAttribute('opacity', r.live ? 0.95 : 0.75);
+        g.appendChild(pl);
+      }
+      r.pts.forEach((p, i) => {
+        const c = document.createElementNS(SVGNS, 'circle');
+        c.setAttribute('cx', p[0].toFixed(1)); c.setAttribute('cy', p[1].toFixed(1));
+        c.setAttribute('r', i === 0 ? 4 : 2.6);
+        c.setAttribute('fill', i === 0 ? '#fff' : r.color);
+        c.setAttribute('stroke', i === 0 ? r.color : '#fff');
+        c.setAttribute('stroke-width', 1.5);
+        g.appendChild(c);
+      });
+    }
+  }
 
   // clear the active selection — clicking empty canvas or pressing Escape
   deselect() {

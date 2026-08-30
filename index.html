@@ -93,6 +93,17 @@
             <label>Intensity <span id="insp-intensity-val">100%</span></label>
             <input type="range" id="insp-intensity" min="0" max="2" step="0.05" value="1">
           </div>
+          <div class="insp-row">
+            <label>Travel route <span id="insp-route-val">none</span></label>
+            <div class="insp-actions">
+              <button id="btn-draw-route">Draw route</button>
+              <button id="btn-clear-route">Clear route</button>
+            </div>
+          </div>
+          <div class="insp-row" id="insp-route-dur-row" hidden>
+            <label>Route time <span id="insp-route-dur-val">4.0s</span></label>
+            <input type="range" id="insp-route-dur" min="0.5" max="12" step="0.5" value="4">
+          </div>
           <div class="insp-actions">
             <button id="btn-remove-motion">Remove motion</button>
             <button id="btn-delete-region" class="danger">Delete region</button>
