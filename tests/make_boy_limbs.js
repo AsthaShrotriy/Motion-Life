@@ -15,7 +15,7 @@
 const fs = require('fs');
 
 const SRC = '/Users/prajjwas/Downloads/boy_grouped.svg';
-const OUT = '/tmp/boy_v3_limbs.svg';
+const OUT = process.env.MS_OUT || '/tmp/boy_v3_limbs.svg';
 
 const RIG = {
   Right_Hand:   { limb: 'arm-r', pivot: [437, 690] },   // viewer-left arm, at the shoulder

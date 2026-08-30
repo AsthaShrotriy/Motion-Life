@@ -1423,8 +1423,7 @@ class Animator {
         for (let i = 0; i < angs.length; i++) {
           if (ok[i]) {
             let d = (angs[i] - rest) * 180 / Math.PI;
-            d = ((d + 180) % 360 + 360) % 360 - 180;     // -180..180, sign preserved
-            held = Math.max(-LIMB_DEG_MAX, Math.min(LIMB_DEG_MAX, d));
+            held = ((d + 180) % 360 + 360) % 360 - 180;  // -180..180, sign preserved
           }
           track.push(held);
         }
@@ -1465,8 +1464,16 @@ class Animator {
     const L = s._limb;
     if (!L.n || !L.limbs.length) return;
     const fi = Math.floor((t * L.fps) % L.n);
-    const rot = (g) => `rotate(${((g.track[fi] || 0) * intensity).toFixed(2)} ` +
-      `${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
+    // LIMB_DEG_MAX is clamped HERE, after intensity, not when the track was built. Clamping
+    // the raw delta first let intensity scale straight past the cap: on the walk-man capture
+    // the head's largest raw delta is +28.2deg, which passes a raw clamp untouched and then
+    // becomes 112.8deg at intensity 4. Clamping last holds it at exactly 75deg, so the cap
+    // is a guarantee at every intensity rather than only at 1.
+    const rot = (g) => {
+      const d = Math.max(-LIMB_DEG_MAX,
+        Math.min(LIMB_DEG_MAX, (g.track[fi] || 0) * intensity));
+      return `rotate(${d.toFixed(2)} ${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
+    };
     for (const g of L.limbs) {
       // SVG applies a transform list RIGHT to LEFT, so the outermost ancestor is written
       // first and the limb's own rotation last — the limb turns about its own joint, then
