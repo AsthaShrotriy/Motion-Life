@@ -10,6 +10,7 @@
  *      node tests/boy_walkman.js            (puppeteer-core lives in the sibling POC)
  * Optional: MS_INTENSITY=2 to scale the measured swing (see the note printed at the end).
  *           MS_RETARGET=off|legs|all to choose whose pose is the neutral (LIMB_RETARGET_DEFAULT).
+ *           MS_OUT=/tmp/other to render somewhere else, so two runs can be compared.
  */
 const puppeteer = require('puppeteer-core');
 
@@ -18,6 +19,7 @@ const SWATCH = 'assets/motion/walk-man-extracted.json';
 const INTENSITY = parseFloat(process.env.MS_INTENSITY || '1');
 const NFRAMES = parseInt(process.env.MS_FRAMES || '60', 10);
 const RETARGET = process.env.MS_RETARGET || '';   // '' = leave the app's default alone
+const OUT = (process.env.MS_OUT || '/tmp/walk').replace(/\/$/, '');
 
 (async () => {
   const browser = await puppeteer.launch({
@@ -130,9 +132,9 @@ const RETARGET = process.env.MS_RETARGET || '';   // '' = leave the app's defaul
   for (let f = 0; f < NFRAMES; f++) {
     await page.evaluate((t) => { window.__ms.animator.pause(); window.__ms.animator._applyAll(t); },
       f * dur / NFRAMES);
-    await el.screenshot({ path: `/tmp/walk/f${String(f).padStart(3, '0')}.png` });
+    await el.screenshot({ path: `${OUT}/f${String(f).padStart(3, '0')}.png` });
   }
-  console.log(`\nrendered ${NFRAMES} frames to /tmp/walk/`);
+  console.log(`\nrendered ${NFRAMES} frames to ${OUT}/`);
   console.log('page errors:', errs.length ? errs.slice(0, 5) : 'none');
   await browser.close();
 })();
