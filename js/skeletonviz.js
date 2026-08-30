@@ -101,7 +101,9 @@ window.showSkeleton = function showSkeleton(videoUrl, pose, color = '#34d399') {
     const W = canvas.width, H = canvas.height;
     function drawFrame(f) {
       ctx.clearRect(0, 0, W, H);
-      window.drawSkeletonFrame(ctx, f, pose.joints, W, H, { pad: 70, color, lineWidth: 6, jointR: 7 });
+      // pad 70 of 600 was 23% margin; the figure already letterboxes itself inside
+      // its normalized box, so that margin only shrank it further.
+      window.drawSkeletonFrame(ctx, f, pose.joints, W, H, { pad: 34, color, lineWidth: 6, jointR: 7 });
     }
     function loop() {
       if (done) return;
