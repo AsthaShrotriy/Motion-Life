@@ -124,8 +124,31 @@ const LIMB_DEG_MAX = 75;
  *
  * A limb with no usable frame is never retargeted — its captured rest would be a fabrication,
  * so it holds its drawn pose exactly as under 'off'.
+ *
+ * WHY THE DEFAULT IS 'legs' AND NOT 'all'. 'all' shipped as the default for one build and broke
+ * the reference boy on sight: head rotated off the neck, both arms folded across the chest with
+ * nothing left at the shoulder. That is not a bug in the offset — it is what a rigid rotation of
+ * flat artwork DOES once the offset gets large. There is no skinning here, and a drawn limb's
+ * silhouette was authored to meet the torso at exactly ONE angle. Offsets on this pair, after
+ * the mirror and the ancestor subtraction, with how far each limb's ink centroid travels because
+ * of it (2*r*sin(off/2) about the pivot, screen px, swing excluded):
+ *
+ *   leg-l  +39.5deg   71px      arm-l  +144.9deg  126px
+ *   leg-r  -20.0deg   25px      arm-r  -120.9deg  128px
+ *   torso   -4.7deg    6px      head    -20.0deg   18px
+ *
+ * The travel is not the test — leg-l moves 71px and stays attached, because a hip sits at the
+ * very top of the leg group and the shorts cover the seam. The ANGLE is the test: past roughly a
+ * right angle the limb points somewhere the artist never drew a joint for, and an arm drawn
+ * straight up cannot be turned 145deg about a shoulder point and still have a shoulder.
+ *
+ * So 'legs' is the default. It is what closes the splay and crosses the feet — measured within
+ * 0.1px of 'all', because only the legs decide the foot gap — while leaving every seam the artist
+ * drew alone. 'all' stays available: on a figure drawn with its arms already down the offsets are
+ * small and it is nearly free. The inspector reports the largest offset a given figure would
+ * take, so that choice is made on the number rather than on a promise.
  */
-const LIMB_RETARGET_DEFAULT = 'all';         // 'off' | 'legs' | 'all'
+const LIMB_RETARGET_DEFAULT = 'legs';        // 'off' | 'legs' | 'all'
 const LIMB_RETARGET_ROLES = /^(leg|shin)-/;  // what 'legs' covers
 
 /* How finely a limb's paths are sampled to find its drawn far end (the foot, the hand).
@@ -1589,7 +1612,21 @@ class Animator {
       for (const g of limbs) g.retarget = !!(g.usable && g.drawn != null && wanted(g.role));
       const order = [...limbs].sort((a, b) => a.chain.length - b.chain.length);
 
-      s._limb = { limbs, order, fps: pose.fps || 15, n: frames.length, mirror, mode };
+      /* What 'all' WOULD cost this figure, whatever mode is actually in force: each limb's
+       * one-off offset with the swing at zero, resolved the same way (see the own-rotation
+       * note below). This is the number that decides whether whole-figure retargeting holds a
+       * drawing together or tears it, so the inspector can show it before the user commits
+       * rather than after. Roles with no usable bone are absent — they are never retargeted. */
+      const offsets = new Map();
+      for (const g of order) {
+        if (!g.usable || g.drawn == null) continue;
+        let acc = 0;
+        for (const p of g.chain) acc += offsets.get(p) || 0;
+        offsets.set(g, deg180(g.restDeg - g.drawn - acc));
+      }
+
+      s._limb = { limbs, order, fps: pose.fps || 15, n: frames.length, mirror, mode,
+                  offsets: [...offsets].map(([g, deg]) => ({ role: g.role, deg })) };
       s._limbMotion = motion.id;
       s._limbRetarget = mode;
     }

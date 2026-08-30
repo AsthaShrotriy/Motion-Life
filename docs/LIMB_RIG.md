@@ -109,25 +109,25 @@ identically zero anyway because the hips are the anchor.
 ## Measured behaviour
 
 `tests/boy_limbs.js` on a rigged reference boy driven by the shipped 132-frame walk, at the
-default `'all'` rest mode — so each **own rotation** below is the one-off rest offset from the
-table further down *plus* that frame's swing:
+default `'legs'` rest mode — so the two legs' **own rotation** is their one-off rest offset from
+the table further down *plus* that frame's swing, while every other limb is the swing alone:
 
 | limb | own rotation | shape distortion | joint ride | tip travel |
 |---|---|---|---|---|
-| `leg-l` |   +5.11° … +117.03° | 0% | 22.2 px | 382.3 px |
-| `leg-r` |  −56.42° …  +64.22° | 0% | 19.6 px | 216.7 px |
-| `arm-r` | −142.97° …  −70.52° | 0% | 94.2 px | 220.4 px |
-| `head`  |  −85.73° …  −36.69° | 0% | 96.8 px |  91.4 px |
-| `torso` |  −32.04° …   +0.62° | 0% |    0 px |    14 px |
-| `arm-l` | 0° … 0° (no signal) | 0% | 92.0 px |  56.4 px |
+| `leg-l` |  −8.00° … +103.91° | 0% | 13.2 px | 374.9 px |
+| `leg-r` | −69.53° …  +51.10° | 0% | 11.7 px | 220.1 px |
+| `arm-r` | −47.53° …  +32.15° | 0% | 56.1 px |  86.8 px |
+| `head`  | −13.97° …  +22.01° | 0% | 57.7 px |  56.8 px |
+| `torso` | −18.93° …  +13.74° | 0% |    0 px |   8.3 px |
+| `arm-l` | 0° … 0° (no signal) | 0% | 54.8 px |  33.6 px |
 
 - `_applyLimbs` ran on all 60 sampled frames; `_applyCloth`, `_applyCharacter` and
   `_applyWings` were not called once.
 - **Shape distortion is 0% on every limb** — rotation is rigid, which is the whole difference
   from the cloth applicator's 112.8%.
-- Every **swing** is inside ±75° and there is no `NaN` in any transform. The own rotations above
-  exceed that only by their rest offset, which is deliberately uncapped (see below); a range can
-  also be up to 150° wide, since the cap is per frame and applies each way.
+- Every **swing** is inside ±75° and there is no `NaN` in any transform. The two legs' own
+  rotations exceed that only by their rest offset, which is deliberately uncapped (see below); a
+  range can also be up to 150° wide, since the cap is per frame and applies each way.
 - `arm-l` emits exactly **one** distinct own-angle (0°) across the clip — it holds its drawn
   pose, retargeting or not. Its 56.4 px of tip travel is the torso carrying it, not invented
   arm motion.
@@ -139,14 +139,16 @@ table further down *plus* that frame's swing:
 
 ## Rest retargeting: whose pose is the neutral
 
-`LIMB_RETARGET_DEFAULT` (`'off' | 'legs' | 'all'`, default **`'all'`**, exposed as the
+`LIMB_RETARGET_DEFAULT` (`'off' | 'legs' | 'all'`, default **`'legs'`**, exposed as the
 inspector's *Rest pose* dropdown) chooses what the per-frame delta is added to.
 
+- **`'legs'`** (default) rotates the leg and shin roles so each starts along the **captured**
+  bone, then adds the delta, leaving arms, head and torso as drawn.
 - **`'off'`** adds the delta on top of the pose **as drawn**. The artwork is untouched and
   borrows only the movement — right when the drawn stance already resembles the clip's.
-- **`'all'`** rotates every usable limb so it starts along the **captured** bone, then adds the
-  delta. Proportions and art are untouched; the stance becomes the subject's.
-- **`'legs'`** does that for the leg and shin roles only, leaving arms, head and torso as drawn.
+- **`'all'`** does the retarget for every usable limb. Proportions and art are untouched; the
+  stance becomes the subject's — and on a figure drawn very differently from the clip, that
+  tears it. See **What `'all'` costs** below; this is why it is not the default.
 
 A limb with **no usable frame is never retargeted** whatever the mode — its captured rest angle
 of 0 means *"this bone was never seen"*, and rotating a drawing to it would be an invention. It
@@ -235,14 +237,18 @@ Crossing measured directly by `tests/boy_foot_cross.js` — the signed gap betwe
 **drawn feet** (each found once in its group's own user space, then carried by the live CTM),
 over all 155 frames, in screen px:
 
-| intensity | `'off'` gap | crosses? | `'all'` gap | crosses? |
-|---|---|---|---|---|
-| 1.0 | 125 … 223.3 px | no | **−27.4 … 83.2 px** | **yes, 4×** |
-| 1.5 | 94.3 … 241.4 px | no | −58 … 106.4 px | yes, 4× |
-| 2.0 | 63.3 … 258.2 px | no | −87.2 … 129.2 px | yes, 6× |
-| 3.0 | 2.7 … 287.3 px | no | — | — |
+| intensity | `'off'` gap | crosses? | `'legs'` gap (default) | crosses? | `'all'` gap | crosses? |
+|---|---|---|---|---|---|---|
+| 1.0 | 125 … 223.3 px | no | **−27.5 … 83.1 px** | **yes, 4×** | −27.4 … 83.2 px | yes, 4× |
+| 1.5 | 94.3 … 241.4 px | no | −58 … 106.4 px | yes, 4× | −58 … 106.4 px | yes, 4× |
+| 2.0 | 63.3 … 258.2 px | no | −87.1 … 129.1 px | yes, 6× | −87.2 … 129.2 px | yes, 6× |
+| 3.0 | 2.7 … 287.3 px | no | — | — | — | — |
 
-`'legs'` lands within 0.1 px of `'all'` here, since only the legs decide the gap.
+`'legs'` lands within 0.1 px of `'all'`, since only the legs decide the foot gap — which is why
+the default retargets the legs and nothing else. The residual difference is itself a check on the
+ancestor subtraction: under `'all'` each leg's own rotation is ~3–5° larger because it no longer
+inherits an un-retargeted torso, and the torso rotates by exactly that much less, so the foot
+lands in the same place either way.
 
 **An earlier version of this table was wrong, and this is why the test exists.** It claimed
 intensity 2.0 crossed at −10.5 … 185.5 px. That reading took each leg group's **bbox
@@ -275,10 +281,39 @@ a wider stride than any of this, and nothing in `assets/videos/` qualifies today
 longer the *only* fix: with the rest retargeted and the facing reconciled, this clip's own
 measured stride crosses the boy's feet at intensity 1.
 
-What `'all'` costs is the drawing's stance, and that is visible: the boy's star jump is gone,
-his arms come down (`arm-l` alone is a **+144.9°** offset), his head straightens and his torso
-uprights. That is the honest trade — the mode exists so it is the user's call, per figure, and
-`'off'` still keeps the drawing exactly as it was.
+## What `'all'` costs, and why it is not the default
+
+`'all'` shipped as the default for exactly one build, and it broke the reference boy on sight:
+head rotated off the neck, both arms folded across the chest with nothing left at the shoulder,
+the tank top's straps attaching to air. Reported as *"the boy's body is broken"*, and it was.
+
+This is not a bug in the offset — the offsets are the same ones tabulated above, and the ancestor
+subtraction is right. It is what a **rigid rotation of flat artwork does** once the offset gets
+large. There is no skinning here: a drawn limb's silhouette was authored to meet the torso at
+exactly one angle, and rotating the group past that leaves a hole. `tests/retarget_cost.js`
+attributes it per limb (`2·r·sin(θ/2)` about the pivot, screen px, swing excluded) and **fails**
+if the mode in force retargets anything past 90°:
+
+| limb | offset | pivot → ink centroid | ink centroid travels | holds together? |
+|---|---|---|---|---|
+| `torso` | −4.7° | 69 px | 6 px | yes |
+| `head` | −20.0° | 52 px | 18 px | yes, just |
+| `leg-r` | −20.0° | 72 px | 25 px | yes |
+| `leg-l` | +39.5° | 105 px | 71 px | yes |
+| `arm-r` | −120.9° | 74 px | 128 px | **no** |
+| `arm-l` | +144.9° | 66 px | 126 px | **no** |
+
+**The travel is not the test.** `leg-l` moves 71 px and stays attached, because a hip sits at the
+very top of the leg group and the shorts cover the seam. The **angle** is the test: past roughly a
+right angle the limb points somewhere the artist never drew a joint for, and an arm drawn straight
+up cannot be turned 145° about a shoulder point and still have a shoulder.
+
+So the default is `'legs'` — measured within 0.1 px of `'all'` on the foot gap, so it delivers the
+crossing at no cost to any seam the artist drew. `'all'` stays selectable, because on a figure
+already drawn with its arms down the offsets are small and it is nearly free; the inspector now
+reports the largest offset *this* figure would take (`whole figure would turn arm-l by +145°,
+which will pull that limb off its joint`), so the choice is made on the number rather than on a
+promise. `'off'` still keeps the drawing exactly as it was.
 
 ## Limitations
 
@@ -287,6 +322,11 @@ uprights. That is the honest trade — the mode exists so it is the user's call,
   26.1° / 28.6° swing at −0.566 antiphase, hip→ankle 31.3° / 29.9° at −0.565, shin 46.7° /
   39.1° at only −0.313. Hip→ankle is a ~5° gain and was left alone deliberately.
 
+- **Rigid rotation bounds how far a pose can be retargeted.** With no skinning, a limb group can
+  only be turned as far as the seam the artist drew will tolerate — measured at roughly 90° before
+  it comes off the joint, which is why `'all'` is opt-in and `tests/retarget_cost.js` guards the
+  default. Deforming the seam (a weighted vertex blend at the attachment) is the real fix and is
+  not implemented.
 - **Pivots are authored by hand.** Nothing infers a shoulder from the drawing yet.
 - **Rotation only** — no stretch, no squash, no elbow/knee IK. `forearm-*` and `shin-*` roles
   exist and work, but our reference artwork does not separate them from the upper limb.

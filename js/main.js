@@ -500,6 +500,13 @@ function showInspector(s) {
  * rest 2.7deg apart, so his feet never pass each other no matter how far Intensity is pushed.
  * Matching the capture aligns each limb's rest to the bone's measured rest first — the drawing
  * keeps its art and proportions and adopts the subject's stance. See LIMB_RETARGET_DEFAULT.
+ *
+ * The hint reports the LARGEST offset whole-figure mode would apply to this figure, measured
+ * from the live rig, because that one number is what decides whether the mode holds a drawing
+ * together. Rotation here is rigid — no skinning — so a limb drawn to meet the torso at one
+ * angle comes away from it once the offset is large: at 120deg the reference boy's arms fold
+ * across his chest with nothing left at the shoulder. Better to show the number than to let the
+ * user find that out by watching it happen.
  */
 function showRetarget(s) {
   const row = $('insp-retarget-row');
@@ -508,9 +515,18 @@ function showRetarget(s) {
   if (!limbs) return;
   // resolved exactly as _applyLimbs does, so the control cannot show a mode that is not in use
   $('insp-retarget').value = s.limbRetarget || s.wrap.dataset.retarget || LIMB_RETARGET_DEFAULT;
+  let cost = '';
+  // only after a motion has been applied does the rig exist and the offsets with it
+  const offs = s._limb && s._limb.offsets;
+  if (offs && offs.length) {
+    const worst = offs.reduce((a, b) => Math.abs(b.deg) > Math.abs(a.deg) ? b : a);
+    cost = ' · whole figure would turn ' + worst.role + ' by '
+      + (worst.deg > 0 ? '+' : '') + worst.deg.toFixed(0) + '°'
+      + (Math.abs(worst.deg) >= 60 ? ', which will pull that limb off its joint' : '');
+  }
   $('insp-retarget-hint').textContent = limbs + (limbs === 1 ? ' rigged limb' : ' rigged limbs')
     + ' · matching the capture moves the drawn stance; keeping it as drawn preserves the pose'
-    + ' but also preserves any splay the motion is too small to close.';
+    + ' but also preserves any splay the motion is too small to close.' + cost;
 }
 
 /*
