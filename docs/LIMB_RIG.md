@@ -132,6 +132,61 @@ identically zero anyway because the hips are the anchor.
 
 `tests/boy_limb_gap.js` measures the hierarchy separately and renders the worst frame.
 
+## Why the legs may not cross, and what to do about it
+
+Reported from a run of `walk-man.mp4` on the boy: *"the legs are not crossing each other."*
+They were not, and the reason is a property of the clip. `tests/clip_stride.py` measures it:
+
+| clip | in-plane thigh swing | antiphase corr | knee-x flips in the source | verdict |
+|---|---|---|---|---|
+| `walk-man.mp4` | 26.1° / 28.6° | −0.566 (−0.778 at best lag) | **2** in 155 frames | swing too small |
+| `walk-pose.json` (shipped) | 104.5° / 110.0° | −0.608 | 12 | alternating, wide, crossing |
+| `dance.mp4` | 153.5° / 168.7° | **+0.873** | 34 | legs move *together*, not a walk |
+| `walk-grid.mp4` | — | — | — | **0/160** usable left thigh |
+
+The alternation in `walk-man.mp4` is real — the two thighs are genuinely in antiphase. It is
+the *amplitude* that is missing, because the man is walking away from the camera: his legs pass
+each other in **depth**, and `l_knee.x − r_knee.x` changes sign only twice in the whole clip
+(span −0.174 … +0.013 — almost always the same side). A 2D pose has nothing to give the rig
+there. The applicator is faithfully reproducing a stride that is not happening in the picture
+plane.
+
+Crossing on this artwork was measured directly (leg-tip horizontal gap, rest = 77.8 px):
+
+| intensity | gap min … max | crosses? |
+|---|---|---|
+| 1.0 | 33.3 … 134.2 px | no |
+| 1.5 | 11.1 … 160.7 px | no |
+| **2.0** | **−10.5 … 185.5 px** | **yes** |
+| 2.5 | −31.4 … 208.3 px | yes |
+
+So intensity **2** is where the legs first pass each other, and that is an honest scale on
+measured antiphase motion rather than invented crossing. The drawn pose matters too: this boy
+is drawn mid-jump with the legs already 77.8 px apart, so a rest pose with the legs together
+would cross at a lower intensity.
+
+**MediaPipe's depth does not rescue this — measured, not assumed.** `pose_server.py` stores
+`(x, y, visibility)` and drops `lm.z`, and the obvious idea is to use `z` (or
+`pose_world_landmarks`) so a stride into depth becomes a real angle. `tests/pose_depth_probe.py`
+runs all three readings over the same 155 frames:
+
+| reading | leg-l swing | leg-r swing | per-frame jitter | antiphase corr |
+|---|---|---|---|---|
+| 2D image angle (what the rig uses) | 14.9° | 16.3° | 0.5° | **−0.568** |
+| `lm.z` image depth | 51.2° | 46.6° | 3.5° | **+0.207** |
+| `pose_world_landmarks`, sagittal | 25.7° | 22.7° | 1.4° | −0.149 |
+
+Depth gives the biggest numbers and the **wrong sign**: at +0.207 the legs would swing
+*together*. It is also 7× noisier frame to frame. The thigh vector really is 44% depth by
+variance, so the stride is there in the world — MediaPipe's estimate of it just is not good
+enough on a small, dark, receding subject. The 2D reading is the only one that preserves the
+alternation, so the rig keeps using it. (The 14.9° here vs 26.1° in the table above is not a
+discrepancy: `_normalize_clip` multiplies x by the source aspect, 1280/720, which is the
+correct correction for `x` and `y` being normalised by different pixel counts.)
+
+The real fix is a better clip: side-on or three-quarter, well lit, subject filling the frame.
+Nothing in `assets/videos/` qualifies today.
+
 ## Limitations
 
 - **Pivots are authored by hand.** Nothing infers a shoulder from the drawing yet.
