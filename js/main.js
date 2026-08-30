@@ -618,12 +618,25 @@ function buildLayerNode(el, depth) {
     eye.classList.toggle('off', !hidden);
   };
 
-  row.onclick = () => {
-    if (wrap) {
+  if (wrap) {
+    row.onclick = () => {
       const t = wrap.querySelector('path,rect,polygon,text,circle,ellipse') || wrap;
       t.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    }
-  };
+    };
+  } else {
+    /* This row is NOT a selectable object, and until now it swallowed the click in
+       silence. regions.js only makes a group a unit if it carries the layer contract
+       (class="layer"/data-name) or a rig (see _hasRig) — an untagged container gets
+       passed over and its CHILDREN are wrapped instead. The trap is that the tree looks
+       byte-identical either way: the same "Boy · Left_Leg · …" rows appear whether or not
+       the file is tagged (measured on boy_grouped.svg vs assets/scenes/boy-limbs.svg),
+       so a dead click reads as a broken app rather than as an untagged group. Say which
+       it is. */
+    row.classList.add('inert');
+    row.title = 'Not a selectable object: this group carries no class="layer"/data-name '
+              + 'and no rig, so the app wrapped its children instead. Click one of those, '
+              + 'or tag this group (see docs/LIMB_RIG.md).';
+  }
   return node;
 }
 

@@ -198,6 +198,11 @@ main.right-collapsed #right-panel { overflow: visible; }
 }
 .layer-row:hover { background: var(--surface); }
 .layer-row.active { background: rgba(110,92,255,0.16); color: var(--accent); }
+/* a group that never became a selectable unit — the row has no click to give (see
+   buildLayerNode); dim it so the tree stops looking like it is broken */
+.layer-row.inert { cursor: default; }
+.layer-row.inert:hover { background: none; }
+.layer-row.inert .layer-name { opacity: 0.45; font-style: italic; }
 .layer-caret {
   flex: 0 0 12px; text-align: center; font-size: 9px;
   color: var(--muted); cursor: pointer; user-select: none;
