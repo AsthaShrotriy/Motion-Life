@@ -28,6 +28,137 @@ const APPLICATOR_BY_CLASS = {
   oscillation: 'oscillate',
 };
 
+/*
+ * How far the ribbon's own half-width may ride into a bend, as a fraction of that bend's
+ * radius. At 1.0 the normal offset is exactly degenerate (the cloth turns inside out), so
+ * this is the deepest fold a ribbon of a given thickness can be asked to make. Applied to
+ * the whole centreline once per frame — see _ribbonBend.
+ */
+const RIBBON_KN_MAX = 0.8;
+
+/* Default seconds for one traverse of an authored travel route (see _applyRoute). Matches
+ * the extracted flutter's own 4s loop, so a scarf completes a whole gust per crossing. */
+const ROUTE_SECONDS = 4.0;
+
+/*
+ * LIMB RIG (see _applyLimbs). Each artwork group tagged data-limb="<role>" is rotated about
+ * its joint by the angle the SAME bone makes in the captured pose, frame for frame.
+ *
+ * The roles map to the 13 joints MediaPipe gives us. '@sho' / '@hip' are the shoulder and
+ * hip midpoints — virtual joints, so the head and torso are driven by exactly the same
+ * bone-angle code as a real limb instead of needing their own special case.
+ */
+const LIMB_BONES = {
+  'arm-l': ['l_sho', 'l_elb'], 'arm-r': ['r_sho', 'r_elb'],
+  'forearm-l': ['l_elb', 'l_wri'], 'forearm-r': ['r_elb', 'r_wri'],
+  'leg-l': ['l_hip', 'l_knee'], 'leg-r': ['r_hip', 'r_knee'],
+  'shin-l': ['l_knee', 'l_ank'], 'shin-r': ['r_knee', 'r_ank'],
+  'head': ['@sho', 'nose'], 'torso': ['@hip', '@sho'],
+};
+
+/*
+ * Which limb each one hangs off. Without this the rig is FLAT: every limb rotates about a
+ * point that never moves, so when the torso leans the shoulders travel and the arms do not
+ * follow. Measured on the rigged boy over the shipped walk, that opened a 54.8px gap at the
+ * left shoulder, 56.1px at the right and 57.7px at the neck (worst frame t=8.07, visible as
+ * the arm separating at the armpit). Composing the parent's rotation outside the child's
+ * closes it: a child rotates about its own joint first, then rides its parent.
+ *
+ * Legs list the torso too even though a hip pivot is nearly the torso's own pivot — "nearly"
+ * was 11.7-13.2px of the same gap, because a hand-placed hip is not exactly the hip midpoint.
+ */
+const LIMB_PARENT = {
+  'arm-l': 'torso', 'arm-r': 'torso', 'head': 'torso',
+  'leg-l': 'torso', 'leg-r': 'torso',
+  'forearm-l': 'arm-l', 'forearm-r': 'arm-r',
+  'shin-l': 'leg-l', 'shin-r': 'leg-r',
+};
+
+/* MediaPipe's own visibility. Below this the landmark is an inference, not an observation. */
+const LIMB_VIS_OK = 0.5;
+
+/*
+ * A bone pointing at the camera projects SHORT, and its 2D angle becomes noise — at the
+ * limit an arm aimed straight down the lens has no direction on screen at all. So a frame
+ * is only believed while the bone still projects at least this fraction of its own median
+ * length. Measured on the shipped walk (assets/motion/walk-pose.json): at 0.6 the right arm
+ * and both legs keep all 132 frames, while the left arm keeps NONE — that subject is
+ * side-on with the left side occluded. A limb with no usable frame holds its drawn pose;
+ * see the note in _applyLimbs about why it is not mirrored from the other side.
+ */
+const LIMB_FORESHORTEN = 0.6;
+
+/* Cap on one limb's swing from its rest angle. A single bad frame must not fling an arm
+ * across the canvas, and no human joint travels much past this from a neutral pose.
+ * It caps the MOTION only — a retarget offset (see LIMB_RETARGET_DEFAULT) is a one-off
+ * rest alignment, not a swing, and capping it would just half-apply the alignment. */
+const LIMB_DEG_MAX = 75;
+
+/*
+ * REST RETARGETING — whether the artwork's drawn pose or the capture's stance is the neutral.
+ *
+ * 'off' adds the capture's per-frame delta on top of the pose as drawn. That keeps the
+ * artwork intact and is the right default for a drawing whose stance already resembles the
+ * clip's, but it also keeps any stance that does NOT: measured on assets/scenes/boy-limbs.svg
+ * driven by assets/motion/walk-man-extracted.json, the boy is drawn in a star jump with his
+ * legs 58.3deg / 115.1deg apart (a 56.8deg splay) while the walking man's thighs rest 2.7deg
+ * apart (93.1deg / 90.4deg as the rig reads them). Closing that takes +39.5deg on one leg and
+ * -20deg on the other, and the walk supplies only 26.1deg / 28.6deg peak to peak, i.e. about
+ * +-13deg from rest — so the feet never pass each other at any usable intensity. The crossing
+ * IS in the capture (the man's ankles swap sides 6 times in 155 frames); it just cannot
+ * survive being added to a splay several times its own size.
+ *
+ * 'all' aligns every usable limb's rest to the bone's captured rest first, then adds the
+ * delta — standard retargeting. The drawing keeps its proportions and its art; it adopts the
+ * subject's stance. 'legs' does the same for the leg and shin roles only, leaving arms, head
+ * and torso as drawn. tests/boy_foot_cross.js, signed foot gap in screen px over 155 frames:
+ *
+ *   intensity   'off'                  'all'
+ *   1           125..223  no crossing   -27.4..83.2  crosses 4x
+ *   2           63.3..258 no crossing   -87.2..129   crosses 6x
+ *   3           2.7..287  no crossing   —
+ *
+ * Intensity 3 is the end of the honest range: 26deg of measured swing scaled by 3 is 78deg,
+ * past LIMB_DEG_MAX, so the clamp starts flattening the stride. 'off' gets within 2.7px of a
+ * crossing there and still does not make one.
+ *
+ * A limb with no usable frame is never retargeted — its captured rest would be a fabrication,
+ * so it holds its drawn pose exactly as under 'off'.
+ *
+ * WHY THE DEFAULT IS 'legs' AND NOT 'all'. 'all' shipped as the default for one build and broke
+ * the reference boy on sight: head rotated off the neck, both arms folded across the chest with
+ * nothing left at the shoulder. That is not a bug in the offset — it is what a rigid rotation of
+ * flat artwork DOES once the offset gets large. There is no skinning here, and a drawn limb's
+ * silhouette was authored to meet the torso at exactly ONE angle. Offsets on this pair, after
+ * the mirror and the ancestor subtraction, with how far each limb's ink centroid travels because
+ * of it (2*r*sin(off/2) about the pivot, screen px, swing excluded):
+ *
+ *   leg-l  +39.5deg   71px      arm-l  +144.9deg  126px
+ *   leg-r  -20.0deg   25px      arm-r  -120.9deg  128px
+ *   torso   -4.7deg    6px      head    -20.0deg   18px
+ *
+ * The travel is not the test — leg-l moves 71px and stays attached, because a hip sits at the
+ * very top of the leg group and the shorts cover the seam. The ANGLE is the test: past roughly a
+ * right angle the limb points somewhere the artist never drew a joint for, and an arm drawn
+ * straight up cannot be turned 145deg about a shoulder point and still have a shoulder.
+ *
+ * So 'legs' is the default. It is what closes the splay and crosses the feet — measured within
+ * 0.1px of 'all', because only the legs decide the foot gap — while leaving every seam the artist
+ * drew alone. 'all' stays available: on a figure drawn with its arms already down the offsets are
+ * small and it is nearly free. The inspector reports the largest offset a given figure would
+ * take, so that choice is made on the number rather than on a promise.
+ */
+const LIMB_RETARGET_DEFAULT = 'legs';        // 'off' | 'legs' | 'all'
+const LIMB_RETARGET_ROLES = /^(leg|shin)-/;  // what 'legs' covers
+
+/* How finely a limb's paths are sampled to find its drawn far end (the foot, the hand).
+ * Measured against a 32x denser sweep (2048/subpath) on all six of the reference boy's limbs,
+ * 64 is within 0.35deg on the worst of them — and it runs once per selection, not per frame. */
+const LIMB_TIP_SAMPLES = 64;
+
+/* Shortest-arc normalisation to -180..180, sign preserved. */
+const deg180 = (d) => ((d + 180) % 360 + 360) % 360 - 180;
+
 class Animator {
   constructor(selectionManager, motionLibrary) {
     this.sel = selectionManager;
@@ -52,23 +183,115 @@ class Animator {
 
   _applyAll(t) {
     for (const s of this.sel.selections) {
-      if (!s.motionId) continue;
+      if (!s.motionId && !s.route) continue;
       if (this.previewWrap && s.wrap === this.previewWrap) continue;   // a drag preview owns this wrap's transform right now
-      const motion = this.motions.getById(s.motionId);
-      if (!motion) continue;
+      const motion = s.motionId ? this.motions.getById(s.motionId) : null;
+      if (!motion && !s.route) continue;
 
       // One selection's special-case animator throwing (bad/unexpected
       // geometry, a missing child element, etc.) used to kill this whole
       // per-frame loop silently — every OTHER animating object on the canvas
       // would freeze too, forever, with no visible error. Isolate failures
       // per-object instead.
-      try {
-        this._applyOne(s, motion, t);
-      } catch (err) {
-        console.error(`Motion "${motion.name}" on "${s.name}" failed to animate:`, err);
-        s.motionId = null;   // stop retrying every frame; object goes static, not the whole scene
+      let ran = false;
+      if (motion) {
+        try {
+          this._applyOne(s, motion, t);
+          ran = true;
+        } catch (err) {
+          console.error(`Motion "${motion.name}" on "${s.name}" failed to animate:`, err);
+          s.motionId = null;   // stop retrying every frame; object goes static, not the whole scene
+        }
+      }
+      // Travel is a SEPARATE channel from deformation, so the two compose instead of one
+      // replacing the other: the applicator rewrote each path's own `d`, and the route now
+      // carries the whole deforming group along. The base transform is captured here,
+      // right after the applicator wrote it, rather than read back inside _applyRoute —
+      // otherwise a route on an object with no motion would prepend to its own offset from
+      // last frame and march off the canvas.
+      if (s.route) {
+        try {
+          this._applyRoute(s, ran ? (s.wrap.getAttribute('transform') || '') : '', t * (s.speed || 1));
+        } catch (err) {
+          console.error(`Travel route on "${s.name}" failed to animate:`, err);
+          s.route = null;
+        }
       }
     }
+  }
+
+  /*
+   * AUTHORED travel along a route drawn on the canvas.
+   *
+   * Deliberately NOT _applyPathTravel. That one plays back an EXTRACTED path and so
+   * refuses to ease or reshape what the video measured, ping-ponging because every
+   * position it shows has to be a real sample. A route is the opposite: every point in it
+   * was placed by hand, so there is no measurement to protect and easing is honest — it is
+   * authored either way. Anything that reads a route must treat it as authored, never as
+   * extracted, which is why route.authored is set at creation and carried through.
+   *
+   * The route lives on the SELECTION, not on the motion swatch. A swatch is meant to be
+   * reusable on any artwork; "fly from her hand out over the lake" only means anything in
+   * this one scene.
+   *
+   * Intensity deliberately does not scale travel: the object goes where the route was
+   * drawn. Intensity still scales the flutter riding on top of it.
+   */
+  _applyRoute(s, base, t) {
+    const tbl = this._routeTable(s);
+    if (!tbl) return;
+    const dur = Math.max(0.1, s.route.duration || ROUTE_SECONDS);
+    /*
+     * The journey is timed from when this route STARTED, not from the global clock. You
+     * draw a route while the scene is already playing — that is the only way to watch the
+     * motion you are adding to — so the clock is already several seconds in by the time
+     * the route commits. Reading it directly dropped the object at whatever phase the loop
+     * happened to be at: committed 2.9s in it appeared 198px along a 243px route, and past
+     * the halfway point it set off BACKWARDS, which reads as the motion starting from the
+     * end. Rewinding (t going backwards, i.e. pause then play) re-arms the origin, so every
+     * play begins at the start of the route.
+     */
+    if (s._routeT0 == null || s._routeT0Rev !== s.route.rev || t < s._routeT0) {
+      s._routeT0 = t;
+      s._routeT0Rev = s.route.rev;
+    }
+    const p = ((t - s._routeT0) % (2 * dur)) / dur;   // 0 .. 2
+    let f = p <= 1 ? p : 2 - p;                      // ping-pong, so the loop never teleports
+    f = f * f * (3 - 2 * f);                         // smoothstep: sets out and returns as a gust
+    const [x, y] = this._routeAt(tbl, f);
+    const dx = x - tbl.x0, dy = y - tbl.y0;          // the first point is wherever the object already is
+    s.wrap.setAttribute('transform',
+      `translate(${dx.toFixed(2)} ${dy.toFixed(2)})${base ? ' ' + base : ''}`);
+  }
+
+  /* Resample the drawn route by ARC LENGTH. Clicks land wherever the hand put them, so
+     parametrizing by point index would sprint across the sparse stretches and crawl
+     through the dense ones; travel should be at a steady speed instead. Rebuilt only when
+     the route's revision changes. */
+  _routeTable(s) {
+    const r = s.route;
+    if (!r || !r.pts || r.pts.length < 2) return null;
+    if (s._routeTbl && s._routeTbl.rev === r.rev) return s._routeTbl.total > 0.5 ? s._routeTbl : null;
+    const cum = [0];
+    for (let i = 1; i < r.pts.length; i++) {
+      cum.push(cum[i - 1] + Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1]));
+    }
+    s._routeTbl = { rev: r.rev, pts: r.pts, cum, total: cum[cum.length - 1],
+                    x0: r.pts[0][0], y0: r.pts[0][1] };
+    return s._routeTbl.total > 0.5 ? s._routeTbl : null;
+  }
+
+  _routeAt(tbl, f) {
+    const target = Math.min(Math.max(f, 0), 1) * tbl.total;
+    let lo = 1, hi = tbl.cum.length - 1;
+    while (lo < hi) {                                // first vertex at or past this arc length
+      const mid = (lo + hi) >> 1;
+      if (tbl.cum[mid] < target) lo = mid + 1; else hi = mid;
+    }
+    const seg = tbl.cum[lo] - tbl.cum[lo - 1] || 1;
+    const q = (target - tbl.cum[lo - 1]) / seg;
+    const a = tbl.pts[lo - 1], b = tbl.pts[lo];
+    return [a[0] + (b[0] - a[0]) * q, a[1] + (b[1] - a[1]) * q];
   }
 
   _applyOne(s, motion, t) {
@@ -77,6 +300,24 @@ class Animator {
     const seed = s.kind === 'svg'
       ? (s.center[0] * 0.01 + s.center[1] * 0.03)
       : (s.bounds.x * 0.01 + s.bounds.y * 0.03);
+
+    // ---- limb articulation: a pose swatch rotates each tagged limb about its joint ----
+    // First of the pose branches, because data-limb is the most specific tag of the three
+    // and a limb-rigged figure usually also carries a [data-role="body"] torso that would
+    // otherwise send it to _applyCharacter, which cannot drive arbitrary paths.
+    if (s.kind === 'svg' && this._poseFor(motion) && s.wrap.querySelector('[data-limb]')) {
+      this._applyLimbs(s, motion, rt, intensity);
+      return;
+    }
+
+    // ---- wing flap: the same pose swatch drives a tagged wing pair ----
+    // Checked BEFORE the character gate: wing tags are more specific than
+    // [data-role="body"], and a bird has no legs for the human rig to drive.
+    if (s.kind === 'svg' && this._poseFor(motion) &&
+        s.wrap.querySelector('[data-role="wing-l"], [data-role="wing-r"]')) {
+      this._applyWings(s, motion, rt, intensity);
+      return;
+    }
 
     // ---- character / skeletal motion: a pose-sequence swatch drives a rig ----
     if (s.kind === 'svg' && this._poseFor(motion) &&
@@ -222,6 +463,20 @@ class Animator {
     return null;
   }
 
+  /*
+   * The extracted cloth CENTRELINE, if this motion carries one (tools/extract_cloth_flutter.py).
+   *
+   * `frames[i][j]` is the cloth's transverse deflection at station u[j] on frame i,
+   * in units of the cloth's own anchor->tip LENGTH — dimensionless, so the same
+   * measured sweep transfers onto a ribbon of any size. Rides at the top level next
+   * to `pose`/`path` rather than in `swatches` because a centreline is not one of
+   * contracts.SWATCH_KINDS; see the note in the extractor.
+   */
+  _centrelineFor(motion) {
+    const cl = motion && motion.centreline;
+    return (cl && cl.frames && cl.frames.length && cl.u && cl.u.length > 1) ? cl : null;
+  }
+
   /* Same for the travel path: `motion.path` or a Step-7 `path` swatch's `.path`. A path
      needs at least two points to be a path at all, which is also the check that keeps an
      untracked rigid_path clip out of path_travel. */
@@ -242,8 +497,9 @@ class Animator {
   _applyByClass(s, motion, app, t, intensity) {
     switch (app) {
       case 'skeletal':
-        // the rig check runs earlier in _applyAll (it needs the pose payload too);
-        // reaching here means this artwork has no rig for the joints to drive
+        // the rig + wing checks run earlier in _applyAll (they need the pose payload
+        // too); reaching here means this artwork carries neither a character rig nor a
+        // tagged wing pair, so there is nothing for the captured joints to drive
         return false;
       case 'wave':
         return this._applyCloth(s, motion, t, intensity);
@@ -374,6 +630,186 @@ class Animator {
     s.wrap.setAttribute('transform', '');
   }
 
+  /*
+   * The cloth's own long axis, by PCA over its pristine geometry. Cached per motion.
+   *
+   * Why the axis and not the bounding box: the synthetic branch below displaces dy as a
+   * function of GLOBAL X. That is only correct for cloth lying along x. A scarf drawn at
+   * -23 degrees has its two long edges at different x for the same point across the
+   * ribbon, so they receive different dy and the ribbon's THICKNESS collapses — measured
+   * on Scene3's #Scarf, that is the necking and the splayed fringe. Fitting the axis and
+   * displacing PERPENDICULAR to it makes the displacement a function of position ALONG
+   * the cloth only, so every point across the thickness moves together.
+   *
+   * Returns { cos, sin, mx, my, sMin, len } or null. The axis is oriented so that S
+   * increases with x, which puts u=0 on the smaller-x end — the same end the existing
+   * mesh branch anchors with 'x0' (a flag's pole, and the scarf's knot at the girl's
+   * hand). For cloth already lying along x, cos=1/sin=0 and this reduces to the
+   * bounding-box behaviour it replaces.
+   */
+  _ribbonAxis(s, c, key) {
+    if (s._ribbon && s._ribbon.key === key) return s._ribbon.axis;
+    let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
+    const pts = [];
+    for (const o of c.els) {
+      let L = 0;
+      try { L = o.el.getTotalLength(); } catch (_) { continue; }
+      if (!(L > 0)) continue;
+      const k = Math.min(24, Math.max(2, Math.round(L / 4)));   // ~4px apart, capped
+      for (let i = 0; i <= k; i++) {
+        let p; try { p = o.el.getPointAtLength(L * i / k); } catch (_) { break; }
+        pts.push(p.x, p.y); n++; sx += p.x; sy += p.y;
+      }
+    }
+    if (n < 8) { s._ribbon = { key, axis: null }; return null; }
+    const mx = sx / n, my = sy / n;
+    for (let i = 0; i < pts.length; i += 2) {
+      const dx = pts[i] - mx, dy = pts[i + 1] - my;
+      sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+    }
+    // principal eigenvector of the 2x2 covariance
+    const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    let cos = Math.cos(th), sin = Math.sin(th);
+    if (cos < 0) { cos = -cos; sin = -sin; }         // orient so S grows with x
+    let sMin = Infinity, sMax = -Infinity;
+    for (let i = 0; i < pts.length; i += 2) {
+      const S = (pts[i] - mx) * cos + (pts[i + 1] - my) * sin;
+      if (S < sMin) sMin = S;
+      if (S > sMax) sMax = S;
+    }
+    let half = 0;                                    // how far the cloth reaches across
+    for (let i = 0; i < pts.length; i += 2) {
+      half = Math.max(half, Math.abs(-(pts[i] - mx) * sin + (pts[i + 1] - my) * cos));
+    }
+    const len = sMax - sMin;
+    const axis = len > 1 ? { cos, sin, mx, my, sMin, len, half } : null;
+    s._ribbon = { key, axis };
+    return axis;
+  }
+
+  /*
+   * Sample an extracted centreline at (u, t): bilinear in station and in time.
+   *
+   * Time wraps around the end of the clip because the extractor reports the wrap seam
+   * and this swatch's is 0.41 of a normal frame step — below the per-frame noise, so
+   * looping it is smoother than any crossfade would be.
+   */
+  _sampleCentreline(cl, u, t) {
+    const F = cl.frames, nf = F.length, ns = cl.u.length;
+    const fp = (t * (cl.fps || 24)) % nf;
+    const f0 = Math.floor(fp), ft = fp - f0;
+    const a = F[((f0 % nf) + nf) % nf], b = F[((f0 + 1) % nf + nf) % nf];
+    const sp = Math.min(ns - 1, Math.max(0, u)) * (ns - 1);
+    const s0 = Math.min(ns - 2, Math.floor(sp)), st = sp - s0;
+    const v0 = a[s0] + (a[s0 + 1] - a[s0]) * st;
+    const v1 = b[s0] + (b[s0 + 1] - b[s0]) * st;
+    return v0 + (v1 - v0) * ft;
+  }
+
+  /*
+   * Build the deformed centreline for one instant, with a cumulative arc length and a
+   * unit tangent at every sample.
+   *
+   * Why arc length: displacing every point perpendicular to a FIXED axis by an amount
+   * that varies along the axis stretches the cloth. The stretch is the centreline's
+   * slope — measured on this swatch it reaches 1.838 at frame 74, which shears a segment
+   * lying along the axis by 109% and tears the artwork visibly. Cloth is inextensible,
+   * so the material coordinate has to be arc length along the DEFORMED curve, not
+   * distance along the rest axis. A consequence is that the free end pulls back toward
+   * the anchor as the cloth waves, which is what a real flag does.
+   *
+   * A thick ribbon also cannot bend tighter than its own half-width: offsetting by the
+   * normal scales length along the curve by (1 - k*n), so it inverts once |k*n| reaches 1.
+   * On this scarf the raw centreline bends to an 11.6px radius while the cloth is 31.6px
+   * thick, past that limit on 12 of the 96 frames. Clamping each point's offset instead
+   * was measured and is WRONG — neighbouring points then get different offsets and shear
+   * across the thickness, which made the worst case worse the harder it clamped (126%
+   * unclamped -> 676% at 0.4). So the limit is applied ONCE PER FRAME to the whole
+   * centreline's amplitude, which keeps the map smooth: the deepest folds simply do not
+   * go as deep as the video's, because this ribbon is too thick to take them.
+   *
+   * Coordinates here are the ribbon's own frame: first component along the axis measured
+   * from the anchor, second across the ribbon.
+   */
+  _ribbonBend(cl, t, len, intensity, half, M = 64) {
+    const px = new Float64Array(M + 1), py = new Float64Array(M + 1);
+    const tx = new Float64Array(M + 1), ty = new Float64Array(M + 1);
+    const kv = new Float64Array(M + 1), cum = new Float64Array(M + 1);
+    const d = new Float64Array(M + 1), h = len / M;
+    for (let i = 0; i <= M; i++) {
+      px[i] = i * h;
+      d[i] = this._sampleCentreline(cl, i / M, t) * len;
+    }
+
+    // Two passes: measure the curvature the full-amplitude fold would need, then rebuild
+    // at the amplitude this ribbon can actually take. Curvature is very nearly linear in
+    // amplitude at these slopes, so one correction lands within a few percent.
+    let scale = intensity;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i <= M; i++) py[i] = d[i] * scale;
+      let kMax = 0;
+      for (let i = 0; i <= M; i++) {
+        // Unit tangent and SIGNED curvature. Both difference stencils must be scaled by
+        // the same step h — a 2h-wide central difference against an h^2 second difference
+        // underestimates the curvature 4x.
+        const a = Math.max(0, i - 1), b = Math.min(M, i + 1), span = (b - a) * h;
+        const d1x = (px[b] - px[a]) / span, d1y = (py[b] - py[a]) / span;
+        const q = Math.hypot(d1x, d1y) || 1;
+        tx[i] = d1x / q; ty[i] = d1y / q;
+        const j = Math.min(M - 1, Math.max(1, i));   // second difference needs both sides
+        const d2y = (py[j + 1] - 2 * py[j] + py[j - 1]) / (h * h);
+        kv[i] = (d1x * d2y) / Math.pow(q, 3);        // px is linear in i, so d2x === 0
+        kMax = Math.max(kMax, Math.abs(kv[i]));
+      }
+      const load = kMax * half;
+      if (pass || !(load > RIBBON_KN_MAX)) break;   // already within what the cloth allows
+      scale *= RIBBON_KN_MAX / load;
+    }
+
+    for (let i = 1; i <= M; i++) {
+      cum[i] = cum[i - 1] + Math.hypot(px[i] - px[i - 1], py[i] - py[i - 1]);
+    }
+    return { px, py, tx, ty, kv, cum, M, total: cum[M] };
+  }
+
+  /*
+   * Place a material point of the ribbon on the deformed curve.
+   *
+   * `sRest` is the point's rest distance from the anchor, which IS its arc length along
+   * the cloth; `n` is its offset across the ribbon. The offset rides on the curve's own
+   * normal, so the thickness turns with the cloth through a fold instead of staying
+   * axis-aligned and collapsing. With a flat centreline this reduces to the identity.
+   */
+  _ribbonMap(bend, sRest, n) {
+    /*
+     * Off the ends, continue straight along the end tangent rather than clamping onto the
+     * curve. Bezier control points are not required to lie within the outline they draw,
+     * so some of them sit past the fitted axis span; clamping collapsed those pairs onto
+     * one point, which measured as a constant 61% distortion on every frame — constant
+     * because the anchored end of a cantilever barely moves, so it was clearly a bug in
+     * the mapping and not anything in the motion.
+     */
+    if (sRest < 0 || sRest > bend.total) {
+      const i = sRest < 0 ? 0 : bend.M, d = sRest < 0 ? sRest : sRest - bend.total;
+      const ux = bend.tx[i], uy = bend.ty[i];
+      return [bend.px[i] + ux * d - uy * n, bend.py[i] + uy * d + ux * n];
+    }
+    const target = sRest;
+    let lo = 1, hi = bend.M;
+    while (lo < hi) {                                // first sample whose arc length >= target
+      const mid = (lo + hi) >> 1;
+      if (bend.cum[mid] < target) lo = mid + 1; else hi = mid;
+    }
+    const i = lo, seg = bend.cum[i] - bend.cum[i - 1] || 1;
+    const f = (target - bend.cum[i - 1]) / seg;
+    const x = bend.px[i - 1] + (bend.px[i] - bend.px[i - 1]) * f;
+    const y = bend.py[i - 1] + (bend.py[i] - bend.py[i - 1]) * f;
+    let ux = bend.tx[i - 1] + (bend.tx[i] - bend.tx[i - 1]) * f;
+    let uy = bend.ty[i - 1] + (bend.ty[i] - bend.ty[i - 1]) * f;
+    const m = Math.hypot(ux, uy) || 1; ux /= m; uy /= m;
+    return [x - uy * n, y + ux * n];                 // normal of (ux, uy) is (-uy, ux)
+  }
+
   _applyCloth(s, motion, t, intensity) {
     // a skirt/dress rigged for the curated waist-pinned sway takes that path instead
     if (s.wrap.querySelector && s.wrap.querySelector('[data-cloth="skirt"]')) {
@@ -382,6 +818,29 @@ class Animator {
     const c = this._deformCache(s, motion.id + ':cloth');
     if (!c.els.length) return false;                 // nothing deformable
     const box = c.box, width = box.width;
+
+    /*
+     * An extracted centreline wins over both branches below: it IS the measured cloth,
+     * where the mesh warp is a captured flow field and the fallback is a synthetic sine.
+     * Deflection arrives in units of the cloth's own length, so it scales to this
+     * artwork by multiplying by the fitted axis length.
+     */
+    const cl = this._centrelineFor(motion);
+    if (cl) {
+      const ax = this._ribbonAxis(s, c, motion.id + ':cloth');
+      if (ax) {
+        const { cos, sin, mx, my, sMin, len } = ax;
+        const bend = this._ribbonBend(cl, t, len, intensity, ax.half);
+        this._deformApply(s, (x, y) => {
+          const dx = x - mx, dy = y - my;
+          const S = dx * cos + dy * sin, N = -dx * sin + dy * cos;
+          const [a, b] = this._ribbonMap(bend, S - sMin, N);
+          return [mx + (sMin + a) * cos - b * sin, my + (sMin + a) * sin + b * cos];
+        });
+        return true;
+      }
+    }
+
     const field = this._fieldFor(s, motion);
 
     if (field) {
@@ -406,7 +865,11 @@ class Animator {
     const phase = 2 * Math.PI * p.frequency * t;
     const turb = p.turbulence * 4 * intensity;
     this._deformApply(s, (x, y) => {
-      const ramp = Math.pow((x - box.minX) / width, 1.15);
+      // Clamp before the fractional power: Bezier control points are not required to lie
+      // inside the outline they draw, so x can fall left of box.minX, and Math.pow() of a
+      // negative base with a fractional exponent is NaN. That put a literal "NaN" into one
+      // of Scene3's 44 scarf paths on every frame, so it silently failed to render.
+      const ramp = Math.pow(Math.max(0, (x - box.minX) / width), 1.15);
       const arg = phase - k * (x - box.minX);
       const dy = A * ramp * Math.sin(arg) + A * 0.32 * ramp * Math.sin(arg * 2.0 + 1.3)
                + turb * ramp * _noise(x * 0.11 + phase * 1.3);
@@ -917,6 +1380,413 @@ class Animator {
   }
 
   /*
+   * Wing flap driven by the CAPTURED pose — not a sine.
+   *
+   * A 13-joint human skeleton has no wing joints, so there is nothing to bind
+   * l_sho/l_elb/l_wri to on a bird. What the clip DOES carry is one honest scalar:
+   * how high the subject's wrists ride relative to their shoulders, measured in
+   * torso lengths so it is size- and distance-independent. On the boy-flapping clip
+   * that track is a clean 0.70 Hz wave that dwells at both extremes and moves fast
+   * between them — asymmetry a sine cannot produce, and the whole point of using the
+   * measured one.
+   *
+   * That track rotates each tagged wing about its ROOT, left and right mirrored. Tag
+   * the artwork data-role="wing-l" / "wing-r", and optionally "wing-body" to pin the
+   * pivot reference and take the body bob; without it the region's own centre is used.
+   */
+  /*
+   * LIMB ARTICULATION from a captured pose — real per-limb motion on path-based artwork.
+   *
+   * The existing character rig (_applyCharacter) can only drive the procedural duck/bear
+   * scenes: it rewrites <polygon points> and circle cx/cy, so arbitrary Illustrator paths
+   * have nothing for it to move, and its puppet fallback bobs the whole figure as one
+   * piece. This drives the artwork the artist actually drew: tag each limb group
+   * data-limb="arm-r" (etc.) and it rotates about its joint by the angle THAT BONE makes
+   * in the capture, frame for frame.
+   *
+   * Rotation is a DELTA from the bone's rest angle (the circular mean over the clip), not
+   * the absolute angle, so the pose the artist drew is the neutral: a boy drawn with his
+   * arms up stays arms-up and the capture swings them around that. Absolute angles would
+   * snap the artwork into the subject's stance on the first frame and throw the drawing
+   * away.
+   *
+   * UNLIKE _applyWings, the measured amplitude is NOT normalised away. Wings map the
+   * clip's range onto a fixed sweep on purpose; here the whole point is the subject's own
+   * articulation, so a small movement stays small. Only LIMB_DEG_MAX clamps it.
+   *
+   * Two gates, both measurements rather than guesses (LIMB_VIS_OK, LIMB_FORESHORTEN). A
+   * gated frame HOLDS the previous good angle rather than snapping to rest, so occlusion
+   * reads as a pause and not as a twitch. A limb with no usable frame at all never moves.
+   *
+   * It is deliberately NOT mirrored from the opposite limb when a side is occluded. The
+   * shipped walk has no usable left arm, and filling it in from the right one with a
+   * half-period offset would look better while being invented — this tool exists to show
+   * motion that was actually measured, so an unmeasured limb stays still.
+   */
+  _applyLimbs(s, motion, t, intensity) {
+    const wrap = s.wrap;
+    const mode = s.limbRetarget || wrap.dataset.retarget || LIMB_RETARGET_DEFAULT;
+    if (!s._limb || s._limbMotion !== motion.id || s._limbRetarget !== mode) {
+      const pose = this._poseFor(motion);
+      const frames = pose.frames.filter(Boolean);
+      const jn = {}; pose.joints.forEach((n, i) => jn[n] = i);
+      // '@sho' / '@hip' are midpoints, so head and torso use the same bone-angle path
+      const jointAt = (f, name) => {
+        if (name === '@sho' || name === '@hip') {
+          const l = f[jn[name === '@sho' ? 'l_sho' : 'l_hip']];
+          const r = f[jn[name === '@sho' ? 'r_sho' : 'r_hip']];
+          if (!l || !r) return null;
+          return [(l[0] + r[0]) / 2, (l[1] + r[1]) / 2, Math.min(l[2], r[2])];
+        }
+        const i = jn[name];
+        return i == null ? null : f[i];
+      };
+
+      const bbOf = el => { try { return el.getBBox(); } catch (_) { return null; } };
+      const pivotAttr = (el) => {
+        const v = el && el.dataset && el.dataset.pivot;
+        if (!v) return null;
+        const m = v.trim().split(/[\s,]+/).map(Number);
+        return (m.length === 2 && m.every(Number.isFinite)) ? [m[0], m[1]] : null;
+      };
+
+      /*
+       * WHICH WAY IS THE CAPTURE FACING, AND WHICH WAY IS THE ARTWORK DRAWN?
+       *
+       * MediaPipe labels landmarks by the SUBJECT's own left and right, so the horizontal
+       * arrangement flips with the camera: filmed from behind, the anatomical left hip sits
+       * at LOWER x, while a figure drawn facing the viewer has its anatomical left limb at
+       * HIGHER x. Matching role-to-role without reconciling that mirrors every horizontal
+       * component — the frames where the subject's feet converge push the artwork's apart.
+       * Measured on walk-man.mp4 (a man walking AWAY) driving the boy (drawn FACING us):
+       * capture hip dx -0.115 against the boy's leg pivots 737 vs 500, i.e. opposite signs.
+       *
+       * Mirroring the capture in x maps a bone direction (dx,dy) -> (-dx,dy), so an angle
+       * becomes 180-angle and a delta simply negates. Antiphase survives (both sides negate),
+       * so this changes WHICH leg leads, not whether they alternate.
+       */
+      const medianDx = (a, b) => {
+        const v = [];
+        for (const f of frames) {
+          const p = jointAt(f, a), q = jointAt(f, b);
+          if (p && q && Math.min(p[2], q[2]) >= LIMB_VIS_OK) v.push(p[0] - q[0]);
+        }
+        if (!v.length) return 0;
+        v.sort((x, y) => x - y);
+        return v[Math.floor(v.length / 2)];
+      };
+      const capSide = medianDx('l_hip', 'r_hip');
+
+      /*
+       * The direction the limb is DRAWN in: its joint to its far end. Needed for retargeting,
+       * which has to know what it is rotating FROM.
+       *
+       * The far end is the sampled path point farthest from the pivot, not the bbox
+       * bottom-centre. A leg drawn on a diagonal has its foot at a bbox CORNER, and reading
+       * the bottom-centre instead put this boy's feet 5.3x closer together than they are —
+       * which is how a "crosses at intensity 2" measurement survived that was not crossing.
+       */
+      const drawnDeg = (el, px, py) => {
+        let best = null, bd = -1;
+        const take = (x, y) => {
+          const d = Math.hypot(x - px, y - py);
+          if (d > bd) { bd = d; best = { x, y }; }
+        };
+        for (const p of el.querySelectorAll('path,polygon,rect,circle,ellipse')) {
+          let n = 0;
+          try { n = p.getTotalLength ? p.getTotalLength() : 0; } catch (_) { n = 0; }
+          if (!(n > 0)) continue;
+          for (let k = 0; k <= LIMB_TIP_SAMPLES; k++) {
+            let q; try { q = p.getPointAtLength(n * k / LIMB_TIP_SAMPLES); } catch (_) { continue; }
+            take(q.x, q.y);
+          }
+        }
+        if (!best) {                                  // nothing measurable: bbox corners
+          const b = bbOf(el);
+          if (!b) return null;
+          take(b.x, b.y); take(b.x + b.width, b.y);
+          take(b.x, b.y + b.height); take(b.x + b.width, b.y + b.height);
+        }
+        return best ? Math.atan2(best.y - py, best.x - px) * 180 / Math.PI : null;
+      };
+
+      // Body reference for inferring an undeclared joint: the tagged torso if there is
+      // one, else the whole region's centre.
+      const torsoEl = wrap.querySelector('[data-limb="torso"]');
+      const fb = bbOf(wrap) || { x: 0, y: 0, width: 1, height: 1 };
+      const tb = (torsoEl && bbOf(torsoEl)) || fb;
+      const bodyC = [tb.x + tb.width / 2, tb.y + tb.height / 2];
+
+      const limbs = [];
+      for (const el of wrap.querySelectorAll('[data-limb]')) {
+        const role = el.dataset.limb;
+        const bone = LIMB_BONES[role];
+        const b = bbOf(el);
+        if (!bone || !b) continue;                      // unknown role: leave it alone
+
+        // ---- the bone's angle track, with both gates ----
+        const lens = [], angs = [];
+        for (const f of frames) {
+          const p = jointAt(f, bone[0]), q = jointAt(f, bone[1]);
+          if (!p || !q) { lens.push(null); angs.push(null); continue; }
+          const L = Math.hypot(q[0] - p[0], q[1] - p[1]);
+          lens.push(Math.min(p[2], q[2]) >= LIMB_VIS_OK ? L : null);
+          angs.push(Math.atan2(q[1] - p[1], q[0] - p[0]));
+        }
+        const seen = lens.filter(v => v != null).sort((x, y) => x - y);
+        const medLen = seen.length ? seen[Math.floor(seen.length / 2)] : 0;
+        const ok = lens.map((L, i) => L != null && L >= LIMB_FORESHORTEN * medLen && angs[i] != null);
+
+        // Rest angle as a CIRCULAR mean — a plain average of atan2 output is wrong the
+        // moment a bone's angle straddles +/-180deg, which any raised arm can.
+        let sx = 0, sy = 0, nOk = 0;
+        for (let i = 0; i < angs.length; i++) {
+          if (!ok[i]) continue;
+          sx += Math.cos(angs[i]); sy += Math.sin(angs[i]); nOk++;
+        }
+        const rest = nOk ? Math.atan2(sy, sx) : 0;
+
+        // Deltas, shortest arc, clamped; a gated frame holds the previous good value.
+        const track = []; let held = 0;
+        for (let i = 0; i < angs.length; i++) {
+          if (ok[i]) {
+            let d = (angs[i] - rest) * 180 / Math.PI;
+            held = ((d + 180) % 360 + 360) % 360 - 180;  // -180..180, sign preserved
+          }
+          track.push(held);
+        }
+
+        // The joint: declared pivot wins. data-pivot is in the limb's OWN user space —
+        // the same space getBBox() reports, and the space the rotate() below acts in,
+        // since the artwork's own transform is applied outside it. For an Illustrator
+        // export whose groups carry no transform that is just the root viewBox.
+        // Otherwise clamp the body centre into this
+
+        // limb's own box — a limb reaches AWAY from the body, so that lands on the edge
+        // where it attaches (the same trick _applyWings uses for a wing root).
+        const pv = pivotAttr(el);
+        if (el.dataset.limbNeutral == null) el.dataset.limbNeutral = el.getAttribute('transform') || '';
+        const px = pv ? pv[0] : Math.max(b.x, Math.min(b.x + b.width, bodyC[0]));
+        const py = pv ? pv[1] : Math.max(b.y, Math.min(b.y + b.height, bodyC[1]));
+        limbs.push({
+          el, role, neutral: el.dataset.limbNeutral, track,
+          usable: nOk, frames: frames.length, px, py, declared: !!pv,
+          restDeg: rest * 180 / Math.PI,               // the bone's captured rest, unmirrored
+          drawn: drawnDeg(el, px, py),                 // where the artwork points it
+        });
+      }
+      // Hang each limb off its parent (LIMB_PARENT). Ancestors that the artwork did not
+      // tag are simply absent from the chain, so a partial rig degrades to a flat one
+      // instead of failing.
+      const byRole = new Map(limbs.map(g => [g.role, g]));
+      for (const g of limbs) {
+        g.chain = [];
+        for (let r = LIMB_PARENT[g.role]; r; r = LIMB_PARENT[r]) {
+          const p = byRole.get(r);
+          if (p) g.chain.push(p);
+        }
+      }
+
+      // Now that the pivots exist, the artwork's facing can be read off them and compared
+      // with the capture's (see the medianDx note). Prefer the legs, fall back to the arms —
+      // a rig may tag only one pair.
+      const sideOf = (l, r) => {
+        const a = byRole.get(l), b2 = byRole.get(r);
+        return (a && b2) ? a.px - b2.px : 0;
+      };
+      const artSide = sideOf('leg-l', 'leg-r') || sideOf('arm-l', 'arm-r');
+      const mirror = capSide * artSide < 0;
+      if (mirror) {
+        for (const g of limbs) {
+          g.restDeg = deg180(180 - g.restDeg);
+          for (let i = 0; i < g.track.length; i++) g.track[i] = -g.track[i];
+        }
+      }
+
+      /* Retarget only where there is something real to retarget to. A limb with no usable
+       * frame has a rest angle of 0 that means "we never saw this bone", and rotating the
+       * drawing to it would be an invention; it holds its drawn pose instead. Resolve
+       * parents before children (shorter chain first) so a child can subtract what its
+       * ancestors already contribute. */
+      const wanted = (role) => mode === 'all' || (mode === 'legs' && LIMB_RETARGET_ROLES.test(role));
+      for (const g of limbs) g.retarget = !!(g.usable && g.drawn != null && wanted(g.role));
+      const order = [...limbs].sort((a, b) => a.chain.length - b.chain.length);
+
+      /* What 'all' WOULD cost this figure, whatever mode is actually in force: each limb's
+       * one-off offset with the swing at zero, resolved the same way (see the own-rotation
+       * note below). This is the number that decides whether whole-figure retargeting holds a
+       * drawing together or tears it, so the inspector can show it before the user commits
+       * rather than after. Roles with no usable bone are absent — they are never retargeted. */
+      const offsets = new Map();
+      for (const g of order) {
+        if (!g.usable || g.drawn == null) continue;
+        let acc = 0;
+        for (const p of g.chain) acc += offsets.get(p) || 0;
+        offsets.set(g, deg180(g.restDeg - g.drawn - acc));
+      }
+
+      s._limb = { limbs, order, fps: pose.fps || 15, n: frames.length, mirror, mode,
+                  offsets: [...offsets].map(([g, deg]) => ({ role: g.role, deg })) };
+      s._limbMotion = motion.id;
+      s._limbRetarget = mode;
+    }
+
+    const L = s._limb;
+    if (!L.n || !L.limbs.length) return;
+    const fi = Math.floor((t * L.fps) % L.n);
+    // LIMB_DEG_MAX is clamped HERE, after intensity, not when the track was built. Clamping
+    // the raw delta first let intensity scale straight past the cap: on the walk-man capture
+    // the head's largest raw delta is +28.2deg, which passes a raw clamp untouched and then
+    // becomes 112.8deg at intensity 4. Clamping last holds it at exactly 75deg, so the cap
+    // is a guarantee at every intensity rather than only at 1.
+    const swing = (g) => Math.max(-LIMB_DEG_MAX,
+      Math.min(LIMB_DEG_MAX, (g.track[fi] || 0) * intensity));
+
+    /*
+     * Each limb's own rotation for this frame, ancestors first.
+     *
+     * Without retargeting this is just the clamped swing, byte for byte what it always was.
+     *
+     * With it, the limb has to END UP along the captured bone, so what it owes is the target
+     * minus where the drawing already points it MINUS whatever its ancestors are about to
+     * contribute — a child rides its parent (see the chain note below), and a captured bone
+     * angle is measured in the frame, so it already contains the parent's motion. Subtracting
+     * the ancestors is what stops that being applied twice.
+     */
+    const own = new Map();
+    for (const g of L.order) {
+      if (!g.retarget) { own.set(g, swing(g)); continue; }
+      let acc = 0;
+      for (const p of g.chain) acc += own.get(p) || 0;
+      own.set(g, deg180(g.restDeg + swing(g) - g.drawn - acc));
+    }
+    const rot = (g) => `rotate(${(own.get(g) || 0).toFixed(2)} ${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
+    for (const g of L.limbs) {
+      // SVG applies a transform list RIGHT to LEFT, so the outermost ancestor is written
+      // first and the limb's own rotation last — the limb turns about its own joint, then
+      // that whole result is carried by its parent, then by its parent's parent.
+      const ops = [];
+      for (let i = g.chain.length - 1; i >= 0; i--) ops.push(rot(g.chain[i]));
+      ops.push(rot(g));
+      g.el.setAttribute('transform', `${g.neutral ? g.neutral + ' ' : ''}${ops.join(' ')}`);
+    }
+    // The limbs carry the whole motion; the region itself must not also drift, or a
+    // route's translate would be competing with a second one written here.
+    wrap.setAttribute('transform', '');
+  }
+
+  _applyWings(s, motion, t, intensity) {
+    const wrap = s.wrap;
+    if (!s._wing || s._wingMotion !== motion.id) {
+      const pose = this._poseFor(motion);
+      const frames = pose.frames.filter(Boolean);
+      const jn = {}; pose.joints.forEach((n, i) => jn[n] = i);
+      const raw = frames.map(f => {
+        const shoY = (f[jn.l_sho][1] + f[jn.r_sho][1]) / 2;
+        const hipY = (f[jn.l_hip][1] + f[jn.r_hip][1]) / 2;
+        const wriY = (f[jn.l_wri][1] + f[jn.r_wri][1]) / 2;
+        return (shoY - wriY) / Math.max(1e-3, Math.abs(shoY - hipY));   // + = wrists up
+      });
+      // Map the clip's own measured range onto the full wing sweep.
+      //
+      // BE CLEAR ABOUT WHAT THIS DISCARDS: the TIMING and SHAPE below are the
+      // subject's, but the AMPLITUDE is not — min becomes -1 and max becomes +1
+      // whatever the real range was, so a subject who barely lifts their wrists
+      // drives the same 26deg sweep as one flapping hard. That is a deliberate
+      // presentation choice (a bird whose wings twitch 2deg reads as broken, not
+      // as subtle), not a measurement. If per-clip flap DEPTH should carry through,
+      // scale MAX_DEG by (hi - lo) here instead of normalizing it away.
+      const lo = Math.min(...raw), hi = Math.max(...raw);
+      const span = Math.max(1e-3, hi - lo);
+      const up = raw.map(v => (v - lo) / span * 2 - 1);                 // -1..+1
+      const bbOf = el => { try { return el.getBBox(); } catch (_) { return null; } };
+      // Every tagged body in this region, with its centre. A region can hold a WHOLE
+      // FLOCK (one selection over a group of birds), so a single reference body is not
+      // enough: pairing every wing to the first one puts the far birds' pivots out on
+      // their own wingtips, and they rotate about the wrong end.
+      // An explicit hinge, when the artwork knows better than the geometry can show.
+      // `data-pivot="x y"` in the SVG's own user units. This exists because getBBox()
+      // IGNORES clip-path: a wing built by clipping a copy of the whole subject (the
+      // only way to rig art whose wings are not separate shapes) reports the subject's
+      // full box, so the clamp below would put every pivot at the subject's centre
+      // rather than at its shoulder. Absent the attribute, nothing changes.
+      const pivotAttr = (el) => {
+        const v = el && el.dataset && el.dataset.pivot;
+        if (!v) return null;
+        const m = v.trim().split(/[\s,]+/).map(Number);
+        return (m.length === 2 && m.every(Number.isFinite)) ? { cx: m[0], cy: m[1] } : null;
+      };
+      const bodies = [];
+      for (const el of wrap.querySelectorAll('[data-role="wing-body"]')) {
+        const b = bbOf(el);
+        const pv = pivotAttr(el);
+        if (el.dataset.wingNeutral == null) el.dataset.wingNeutral = el.getAttribute('transform') || '';
+        bodies.push({ el, neutral: el.dataset.wingNeutral, bb: b, pivot: pv,
+          cx: pv ? pv.cx : (b ? b.x + b.width / 2 : 0),
+          cy: pv ? pv.cy : (b ? b.y + b.height / 2 : 0) });
+      }
+      const fb = bbOf(wrap) || { x: 0, y: 0, width: 1, height: 1 };
+      // No tagged body at all: fall back to the region's own centre, as before.
+      const fallback = { cx: fb.x + fb.width / 2, cy: fb.y + fb.height / 2, bb: fb };
+      const nearestBody = (b) => {
+        if (!bodies.length) return fallback;
+        const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+        let best = null, bd = Infinity;
+        for (const bo of bodies) {
+          const d = (bo.cx - cx) ** 2 + (bo.cy - cy) ** 2;
+          if (d < bd) { bd = d; best = bo; }
+        }
+        return best;
+      };
+      const wings = [];
+      for (const [role, sign] of [['wing-l', 1], ['wing-r', -1]]) {
+        for (const el of wrap.querySelectorAll(`[data-role="${role}"]`)) {
+          const b = bbOf(el);
+          if (!b) continue;
+          // Remember the artwork's own transform ON the element, so re-binding a
+          // motion can never stack our rotate() on top of a previous one.
+          if (el.dataset.wingNeutral == null) el.dataset.wingNeutral = el.getAttribute('transform') || '';
+          // The wing ROOT, in order of trust: this wing's own declared pivot, then its
+          // body's declared pivot (used verbatim — a declared hinge is not clamped, or
+          // clipped art would snap back to the box centre), then the geometric guess:
+          // clamp its own body's centre into the wing's box. A wing reaches AWAY from
+          // the body, so that guess lands on its shoulder edge.
+          const own = pivotAttr(el), bo = nearestBody(b);
+          const pv = own || bo.pivot;
+          wings.push({ el, sign, neutral: el.dataset.wingNeutral,
+            px: pv ? pv.cx : Math.max(b.x, Math.min(b.x + b.width, bo.cx)),
+            py: pv ? pv.cy : Math.max(b.y, Math.min(b.y + b.height, bo.cy)) });
+        }
+      }
+      // Bob is per-body and scaled by that body's OWN height — one region holding a
+      // flock of differently-sized birds must not bob them all by the big one's amount.
+      s._wing = { up, fps: pose.fps || 15, wings,
+        bodies: bodies.map(bo => ({ el: bo.el, neutral: bo.neutral,
+          bob: (bo.bb ? bo.bb.height : fb.height) * 0.06 })),
+        bob: fb.height * 0.02 };
+      s._wingMotion = motion.id;
+    }
+    const w = s._wing, n = w.up.length;
+    if (!n || !w.wings.length) return;
+    const u = w.up[Math.floor((t * w.fps) % n)];
+    // 26 deg of sweep at full intensity. A positive rotate() is clockwise on screen,
+    // which LIFTS a wing reaching up-left and DROPS one reaching up-right — hence the
+    // mirrored sign per side, so both wings rise together.
+    const ang = u * 26 * intensity;
+    for (const g of w.wings) {
+      g.el.setAttribute('transform', `${g.neutral ? g.neutral + ' ' : ''}` +
+        `rotate(${(ang * g.sign).toFixed(2)} ${g.px.toFixed(1)} ${g.py.toFixed(1)})`);
+    }
+    // A real bird rises on the DOWNstroke, so the body sinks as the wings come up.
+    for (const bd of w.bodies) {
+      const dy = u * (bd.bob != null ? bd.bob : w.bob) * intensity;
+      bd.el.setAttribute('transform',
+        `${bd.neutral ? bd.neutral + ' ' : ''}translate(0 ${dy.toFixed(2)})`);
+    }
+    wrap.setAttribute('transform', '');
+  }
+
+  /*
    * Character / skeletal motion. The swatch carries a captured pose sequence
    * (motion.pose = {joints, fps, frames}) from MediaPipe. Drive a rigged
    * character in the artwork: reposition its two legs (hip→knee→ankle) from the
@@ -1013,6 +1883,7 @@ class Animator {
   // and "Remove motion" (resets just the one object), so removing a motion
   // always fully reverts it regardless of which animation path it used.
   _resetOne(s) {
+    s._routeT0 = null;              // next play starts the journey from the route's start
     if (s._treeLeaves) {
       s._treeLeaves.el.removeAttribute('transform');
       s._treeLeaves = null;
@@ -1028,6 +1899,23 @@ class Animator {
         if (o.cy != null) o.el.setAttribute('cy', o.cy);
       }
       s._char = null; s._charMotion = null;
+    }
+    // Limb rig: put back the transform the ARTWORK carried, not nothing — an Illustrator
+    // group may legitimately have its own transform, and removing it would move the limb.
+    if (s._limb) {
+      for (const g of s._limb.limbs) {
+        if (g.neutral) g.el.setAttribute('transform', g.neutral);
+        else g.el.removeAttribute('transform');
+      }
+      s._limb = null; s._limbMotion = null; s._limbRetarget = null;
+    }
+    // Same for wings, which previously kept their last rotation after a stop.
+    if (s._wing) {
+      for (const g of [...s._wing.wings, ...s._wing.bodies]) {
+        if (g.neutral) g.el.setAttribute('transform', g.neutral);
+        else g.el.removeAttribute('transform');
+      }
+      s._wing = null; s._wingMotion = null;
     }
     if (s._birds) { for (const bd of s._birds) { bd.el.removeAttribute('transform'); bd.el.style.opacity = ''; } s._birds = null; s._birdsMotion = null; }
     if (s._clouds) { for (const cd of s._clouds) cd.el.removeAttribute('transform'); s._clouds = null; s._cloudsMotion = null; }

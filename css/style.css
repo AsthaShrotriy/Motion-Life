@@ -198,6 +198,11 @@ main.right-collapsed #right-panel { overflow: visible; }
 }
 .layer-row:hover { background: var(--surface); }
 .layer-row.active { background: rgba(110,92,255,0.16); color: var(--accent); }
+/* a group that never became a selectable unit — the row has no click to give (see
+   buildLayerNode); dim it so the tree stops looking like it is broken */
+.layer-row.inert { cursor: default; }
+.layer-row.inert:hover { background: none; }
+.layer-row.inert .layer-name { opacity: 0.45; font-style: italic; }
 .layer-caret {
   flex: 0 0 12px; text-align: center; font-size: 9px;
   color: var(--muted); cursor: pointer; user-select: none;
@@ -503,6 +508,13 @@ main.right-collapsed #right-panel { overflow: visible; }
   border-radius: 6px; color: var(--text); padding: 6px 9px; font-size: 13px;
 }
 .insp-row input[type="range"] { width: 100%; margin-top: 3px; accent-color: var(--accent); }
+.insp-row select {
+  width: 100%; background: var(--surface); border: 1px solid var(--panel-edge);
+  border-radius: 6px; color: var(--text); padding: 6px 9px; font-size: 12.5px;
+}
+/* why the choice matters, not just what it is — the wrong rest pose looks like a broken
+   applicator rather than a mismatched stance (see showRetarget) */
+.insp-hint { margin: 5px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
 .motion-badge {
   display: inline-block; font-size: 12px;
   background: var(--surface); border: 1px solid var(--panel-edge);

@@ -19,7 +19,7 @@ depth); pose keeps [x,y,visibility]. Contract-B shapes live in service/contracts
 Run with the MediaPipe venv (Python <=3.12):
   /tmp/ms-test/mpvenv/bin/python service/pose_server.py    # serves on :8770
 """
-import json, tempfile, os, sys
+import json, tempfile, os, sys, statistics
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from collections import Counter
@@ -93,16 +93,6 @@ def _bbox_norm_xyz(lms):
     return [[round((p.x - x0) / bw, 4), round((p.y - y0) / bh, 4), round(float(p.z), 4)] for p in lms]
 
 
-def _pose_norm(lm):
-    """Return (bbox-normalized [[x,y,vis]x13] matching extract(), raw {name:(x,y,vis)})."""
-    pts = {n: (lm[i].x, lm[i].y, lm[i].visibility) for n, i in IDX.items()}
-    xs = [p[0] for p in pts.values()]; ys = [p[1] for p in pts.values()]
-    x0, y0 = min(xs), min(ys); bw = max(1e-3, max(xs) - x0); bh = max(1e-3, max(ys) - y0)
-    frame = [[round((pts[n][0] - x0) / bw, 4), round((pts[n][1] - y0) / bh, 4),
-              round(float(pts[n][2]), 3)] for n in NAMES]
-    return frame, pts
-
-
 def fill_gaps(flat_seq, K=GAP_K):
     """Linearly interpolate None runs up to K frames; longer gaps / clip-edge gaps
     stay None (flagged 'gap'). flat_seq: list of equal-length float vectors or None.
@@ -154,6 +144,92 @@ def _viewpoint(raws):
     return Counter(labels).most_common(1)[0][0] if labels else "unknown"
 
 
+VIS_OK = 0.5              # landmark visibility below this is not trusted as an anchor
+
+
+def _clip_scale_and_anchors(raws):
+    """Per-clip CONSTANT scale + per-frame limb-independent anchor.
+
+    Why this exists: the byte-frozen extract() normalizes each frame by that
+    frame's OWN landmark extent (see the bw/bh there). The wrists are the widest
+    landmarks, so a subject flapping
+    their arms nearly doubles the divisor and visibly shrinks the shoulders, hips
+    and torso — measured on a boy-waving clip, the stored shoulder width swung
+    123% while his real shoulder width varied only 17%, correlating -0.95 with arm
+    span. Anchoring on the hip midpoint (which the arms cannot move) and dividing
+    by ONE constant for the whole clip keeps inter-frame proportions rigid.
+
+    Returns (scale, anchors) where anchors[i] is None for an undetected frame.
+    """
+    torsos, anchors = [], []
+    for pts in raws:
+        if not pts:
+            anchors.append(None); continue
+        ls, rs, lh, rh = pts["l_sho"], pts["r_sho"], pts["l_hip"], pts["r_hip"]
+        hips_ok = max(lh[2], rh[2]) >= VIS_OK
+        if hips_ok:
+            anchors.append(((lh[0] + rh[0]) / 2, (lh[1] + rh[1]) / 2))
+        else:                                    # hips unreliable this frame: fall back
+            xs = [p[0] for p in pts.values()]    # to its bbox centre (still limb-affected,
+            ys = [p[1] for p in pts.values()]    # but only shifts, never rescales)
+            anchors.append(((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
+        if hips_ok and max(ls[2], rs[2]) >= VIS_OK:
+            torsos.append(abs((ls[1] + rs[1]) / 2 - (lh[1] + rh[1]) / 2))
+
+    if torsos:
+        return max(1e-3, statistics.median(torsos)), anchors
+    # No trustworthy torso anywhere (heavy occlusion). Fall back to the clip-wide
+    # GLOBAL bbox — still a single constant, so it cannot pulse either.
+    allv = [p for pts in raws if pts for p in pts.values()]
+    if not allv:
+        return 1.0, anchors
+    xs = [p[0] for p in allv]; ys = [p[1] for p in allv]
+    return max(1e-3, max(max(xs) - min(xs), max(ys) - min(ys))), anchors
+
+
+def _normalize_clip(raws, aspect=1.0):
+    """raws -> [[x,y,vis]x13] per frame in 0..1, via ONE affine transform per clip.
+
+    The scale is uniform on both axes (the old code used separate bw/bh, which
+    squashed body proportions to fill the box) and the extent is measured once
+    over every frame, so no single frame can rescale the others.
+
+    `aspect` is the source clip's width/height. MediaPipe reports x as a fraction
+    of frame WIDTH and y as a fraction of frame HEIGHT, so on a 16:9 clip a
+    horizontal distance arrives 1.78x smaller than the same distance measured
+    vertically. Scaling BOTH axes by one number (which is what stops the pulsing)
+    inherits that squash — measured on the boy-flapping clip, shoulder span over
+    body height came out 0.131 where a real human is 0.21-0.27, and 0.131 x 16/9
+    = 0.233 lands back in range. Multiplying x by the aspect first puts both axes
+    in square-pixel units, so the stored figure has the subject's real
+    proportions. The uncorrected raws are still what _viewpoint() votes on: its
+    R = shoulder_w/torso_h thresholds were calibrated in image-normalized space.
+    """
+    if aspect != 1.0:
+        raws = [None if not pts else
+                {n: (p[0] * aspect, p[1], p[2]) for n, p in pts.items()}
+                for pts in raws]
+    scale, anchors = _clip_scale_and_anchors(raws)
+    cen = []
+    for pts, a in zip(raws, anchors):
+        if not pts or a is None:
+            cen.append(None); continue
+        cen.append([((pts[n][0] - a[0]) / scale, (pts[n][1] - a[1]) / scale, pts[n][2])
+                    for n in NAMES])
+    xs = [p[0] for f in cen if f for p in f]
+    ys = [p[1] for f in cen if f for p in f]
+    if not xs:
+        return [None] * len(raws)
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    ext = max(1e-6, x1 - x0, y1 - y0)            # ONE constant for the whole clip
+    padx = (ext - (x1 - x0)) / 2                 # centre the shorter axis in the box
+    pady = (ext - (y1 - y0)) / 2
+    return [None if f is None else
+            [[round((p[0] - x0 + padx) / ext, 4), round((p[1] - y0 + pady) / ext, 4),
+              round(float(p[2]), 3)] for p in f]
+            for f in cen]
+
+
 def _reshape3(filled):
     """flat vector -> [[x,y,z]x(len/3)] (or None)."""
     return [None if f is None else [[round(f[k], 4), round(f[k + 1], 4), round(f[k + 2], 4)]
@@ -162,15 +238,21 @@ def _reshape3(filled):
 
 def extract_pose_b(path):
     """Pose as a Contract-B skeleton swatch: viewpoint + gap-filled frames + confidence."""
-    frames, raws = [], []
+    sampled = _sample_frames(path)
+    # Pixel aspect of the source, needed to undo MediaPipe's per-axis normalization.
+    h0, w0 = (sampled[0].shape[:2] if sampled else (1, 1))
+    aspect = (w0 / h0) if h0 else 1.0
+    raws = []
     with MP.Pose(model_complexity=1, min_detection_confidence=0.5,
                  min_tracking_confidence=0.5) as pose:
-        for fr in _sample_frames(path):
+        for fr in sampled:
             res = pose.process(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB))
             if not res.pose_landmarks:
-                frames.append(None); raws.append(None); continue
-            fnorm, pts = _pose_norm(res.pose_landmarks.landmark)
-            frames.append(fnorm); raws.append(pts)
+                raws.append(None); continue
+            lm = res.pose_landmarks.landmark
+            raws.append({n: (lm[i].x, lm[i].y, lm[i].visibility) for n, i in IDX.items()})
+    # Normalize over the WHOLE clip, not frame by frame — see _normalize_clip.
+    frames = _normalize_clip(raws, aspect)
     detected = sum(1 for f in frames if f)
     vis = [tri[2] for f in frames if f for tri in f]
     conf = sum(vis) / len(vis) if vis else 0.0

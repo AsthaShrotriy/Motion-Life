@@ -16,8 +16,11 @@ window.handleMotionUpload = async (e) => {
   const videoUrl = URL.createObjectURL(file);
   const videoRec = addVideoThumb(videoUrl, file.name.replace(/\.[^.]+$/, ''));
 
-  const wrapIsRig = (w) => w && ((w.matches && w.matches('[data-motion-mode="character"]')) ||
-                                 w.querySelector('[data-motion-mode="character"], [data-role="body"]'));
+  // data-limb counts: a limb-rigged figure IS a rig (see docs/LIMB_RIG.md). Without it the
+  // status line calls a properly articulated figure an unrigged "whole-body puppet", which
+  // is the opposite of what _applyOne will actually do with it.
+  const wrapIsRig = (w) => w && ((w.matches && w.matches('[data-motion-mode="character"], [data-limb]')) ||
+                                 w.querySelector('[data-motion-mode="character"], [data-role="body"], [data-limb]'));
 
   // ===== VLM AUTO-ROUTE ==========================================================
   // The router LOOKS AT THE CLIP and picks the extractor — you don't declare the type.

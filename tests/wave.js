@@ -36,17 +36,23 @@ const ok = (c, m) => { console.log((c ? '✅ ' : '❌ FAIL: ') + m); if (!c) FAI
     const dMid = cloth.getAttribute('d');
     const wrapTransform = wrap.getAttribute('transform') || '';
 
-    // measure two sample points 250ms apart: root (near pole) vs tip
-    const len = cloth.getTotalLength();
-    const p1a = cloth.getPointAtLength(len * 0.02);
-    const p2a = cloth.getPointAtLength(len * 0.45);
-    await new Promise(r => setTimeout(r, 250));
-    const p1b = cloth.getPointAtLength(len * 0.02);
-    const p2b = cloth.getPointAtLength(len * 0.45);
-    const rootMove = Math.hypot(p1b.x - p1a.x, p1b.y - p1a.y);
-    const tipMove = Math.hypot(p2b.x - p2a.x, p2b.y - p2a.y);
-
+    // Root (at the pole) vs tip, as displacement FROM REST at the worst phase of a whole
+    // loop. Comparing two live frames 250ms apart instead measured velocity at whatever
+    // phase the clock happened to land on, which says nothing about how far each end
+    // travels — a tip caught at its turning point reads as motionless.
     animator.pause();
+    const len = cloth.getTotalLength();
+    const at = (f) => cloth.getPointAtLength(len * f);
+    const rest = [at(0.02), at(0.45)];
+    let rootMove = 0, tipMove = 0;
+    for (let i = 0; i < 32; i++) {
+      animator._applyAll(i * 4 / 32);
+      const a = at(0.02), b = at(0.45);
+      rootMove = Math.max(rootMove, Math.hypot(a.x - rest[0].x, a.y - rest[0].y));
+      tipMove = Math.max(tipMove, Math.hypot(b.x - rest[1].x, b.y - rest[1].y));
+    }
+    animator.pause();          // sampling left the last frame applied; reset before the check below
+
     const dAfter = cloth.getAttribute('d');
 
     return { defaultWave, geomChanged: d0 !== dMid, wrapTransform, rootMove, tipMove, restored: dAfter === d0 };
@@ -55,7 +61,7 @@ const ok = (c, m) => { console.log((c ? '✅ ' : '❌ FAIL: ') + m); if (!c) FAI
   ok(res.defaultWave, 'flag defaults to cloth/wave mode');
   ok(res.geomChanged, 'path geometry (d attribute) deforms while playing');
   ok(!res.wrapTransform, `wrap has NO rigid transform in wave mode (got "${res.wrapTransform}")`);
-  ok(res.tipMove > res.rootMove * 2, `tip moves more than pole edge (tip ${res.tipMove.toFixed(2)}px vs root ${res.rootMove.toFixed(2)}px) — a wave, not a shift`);
+  ok(res.tipMove > res.rootMove * 2, `tip travels more than the pole edge (tip ${res.tipMove.toFixed(2)}px vs root ${res.rootMove.toFixed(2)}px, worst phase of the loop) — a wave, not a shift`);
   ok(res.restored, 'pause restores pristine geometry');
 
   // ---- export path ----

@@ -180,8 +180,11 @@ function chipLoop() {
       ctx.fillStyle = '#0e1420'; ctx.fillRect(0, 0, S, S);
       const n = pose.frames.length;
       const fi = Math.floor(t * pose.fps) % n;
+      // pad was S*0.17 — 34% of the tile was margin, so a standing figure (which
+      // only fills ~81% of its own normalized box on the tall axis) rendered at
+      // barely half the tile height. 0.06 keeps the joint dots off the edge.
       window.drawSkeletonFrame(ctx, pose.frames[fi], pose.joints, S, S,
-        { pad: S * 0.17, color: motion.color || '#34d399', lineWidth: Math.max(2, S * 0.02), jointR: Math.max(2, S * 0.02) });
+        { pad: S * 0.06, color: motion.color || '#34d399', lineWidth: Math.max(2, S * 0.02), jointR: Math.max(2, S * 0.02) });
       continue;
     }
 
@@ -481,8 +484,73 @@ function showInspector(s) {
     badge.textContent = m ? m.name : 'Unknown';
     badge.classList.add('assigned');
   } else { badge.textContent = 'None — select a motion'; badge.classList.remove('assigned'); }
+  showRetarget(s);
+  showRoute(s);
   markLayerActive(s.wrap);
   showJudge(s);
+}
+
+/*
+ * Rest-pose control. Only meaningful for a limb-rigged figure, so it stays hidden otherwise
+ * rather than offering a dial that does nothing.
+ *
+ * "Keep the pose as drawn" adds the capture's per-frame delta on top of the artwork's own
+ * stance. That is right when the drawing already stands like the clip, and wrong when it does
+ * not: the reference boy is drawn mid-jump with his legs 56.8deg apart while the walking man's
+ * rest 2.7deg apart, so his feet never pass each other no matter how far Intensity is pushed.
+ * Matching the capture aligns each limb's rest to the bone's measured rest first — the drawing
+ * keeps its art and proportions and adopts the subject's stance. See LIMB_RETARGET_DEFAULT.
+ *
+ * The hint reports the LARGEST offset whole-figure mode would apply to this figure, measured
+ * from the live rig, because that one number is what decides whether the mode holds a drawing
+ * together. Rotation here is rigid — no skinning — so a limb drawn to meet the torso at one
+ * angle comes away from it once the offset is large: at 120deg the reference boy's arms fold
+ * across his chest with nothing left at the shoulder. Better to show the number than to let the
+ * user find that out by watching it happen.
+ */
+function showRetarget(s) {
+  const row = $('insp-retarget-row');
+  const limbs = s.wrap.querySelectorAll('[data-limb]').length;
+  row.hidden = !limbs;
+  if (!limbs) return;
+  // resolved exactly as _applyLimbs does, so the control cannot show a mode that is not in use
+  $('insp-retarget').value = s.limbRetarget || s.wrap.dataset.retarget || LIMB_RETARGET_DEFAULT;
+  let cost = '';
+  // only after a motion has been applied does the rig exist and the offsets with it
+  const offs = s._limb && s._limb.offsets;
+  if (offs && offs.length) {
+    const worst = offs.reduce((a, b) => Math.abs(b.deg) > Math.abs(a.deg) ? b : a);
+    cost = ' · whole figure would turn ' + worst.role + ' by '
+      + (worst.deg > 0 ? '+' : '') + worst.deg.toFixed(0) + '°'
+      + (Math.abs(worst.deg) >= 60 ? ', which will pull that limb off its joint' : '');
+  }
+  $('insp-retarget-hint').textContent = limbs + (limbs === 1 ? ' rigged limb' : ' rigged limbs')
+    + ' · matching the capture moves the drawn stance; keeping it as drawn preserves the pose'
+    + ' but also preserves any splay the motion is too small to close.' + cost;
+}
+
+/*
+ * Travel-route controls. A route is AUTHORED — hand-drawn points, not measured motion —
+ * so the label says so plainly rather than sitting next to the extracted swatches as if it
+ * came out of a video.
+ */
+function showRoute(s) {
+  const val = $('insp-route-val'), row = $('insp-route-dur-row');
+  const drawing = sel.routing && sel.routing.sel === s;
+  if (drawing) {
+    val.textContent = `drawing — ${sel.routing.pts.length} pts, double-click to finish`;
+  } else if (s.route) {
+    val.textContent = `authored, ${s.route.pts.length} pts`;
+  } else {
+    val.textContent = 'none';
+  }
+  row.hidden = !s.route;
+  if (s.route) {
+    $('insp-route-dur').value = s.route.duration;
+    $('insp-route-dur-val').textContent = s.route.duration.toFixed(1) + 's';
+  }
+  $('btn-draw-route').textContent = drawing ? 'Finish route' : (s.route ? 'Redraw route' : 'Draw route');
+  $('btn-clear-route').disabled = !s.route;
 }
 function hideInspector() { $('inspector-section').hidden = true; $('inspector-content').hidden = true; markLayerActive(null); showJudge(null); }
 
@@ -590,12 +658,25 @@ function buildLayerNode(el, depth) {
     eye.classList.toggle('off', !hidden);
   };
 
-  row.onclick = () => {
-    if (wrap) {
+  if (wrap) {
+    row.onclick = () => {
       const t = wrap.querySelector('path,rect,polygon,text,circle,ellipse') || wrap;
       t.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    }
-  };
+    };
+  } else {
+    /* This row is NOT a selectable object, and until now it swallowed the click in
+       silence. regions.js only makes a group a unit if it carries the layer contract
+       (class="layer"/data-name) or a rig (see _hasRig) — an untagged container gets
+       passed over and its CHILDREN are wrapped instead. The trap is that the tree looks
+       byte-identical either way: the same "Boy · Left_Leg · …" rows appear whether or not
+       the file is tagged (measured on boy_grouped.svg vs assets/scenes/boy-limbs.svg),
+       so a dead click reads as a broken app rather than as an untagged group. Say which
+       it is. */
+    row.classList.add('inert');
+    row.title = 'Not a selectable object: this group carries no class="layer"/data-name '
+              + 'and no rig, so the app wrapped its children instead. Click one of those, '
+              + 'or tag this group (see docs/LIMB_RIG.md).';
+  }
   return node;
 }
 
@@ -618,6 +699,51 @@ function markLayerActive(wrap) {
 $('insp-name').addEventListener('change', () => { const s = sel.getActive(); if (s) { s.name = $('insp-name').value; renderChips(); if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw(); } });
 $('insp-speed').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.speed = parseFloat($('insp-speed').value); $('insp-speed-val').textContent = s.speed.toFixed(1) + 'x'; } });
 $('insp-intensity').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.intensity = parseFloat($('insp-intensity').value); $('insp-intensity-val').textContent = Math.round(s.intensity * 100) + '%'; } });
+$('insp-retarget').addEventListener('change', () => {
+  const s = sel.getActive();
+  if (!s) return;
+  s.limbRetarget = $('insp-retarget').value;
+  // _applyLimbs keys its cached rig on the mode, so the next animated frame rebuilds on its
+  // own. Nothing is drawn here on purpose: pause() resets the artwork to its neutral, so
+  // painting a frame now would contradict a stopped animation.
+});
+
+// ---- travel route ----
+$('btn-draw-route').addEventListener('click', () => {
+  const s = sel.getActive();
+  if (!s) return;
+  if (sel.routing) {
+    const ok = sel.endRoute(true);
+    status(ok ? `Route saved on "${s.name}" — press Play to send it along.`
+              : 'Route needs at least one destination point.');
+  } else if (sel.beginRoute()) {
+    status(`Click across the canvas to lay out where "${s.name}" travels. ` +
+           'Double-click to finish, Esc to cancel.');
+  }
+  showRoute(s);
+});
+$('btn-clear-route').addEventListener('click', () => {
+  const s = sel.getActive();
+  if (!s) return;
+  sel.clearRoute(s);
+  status(`Travel route removed from "${s.name}".`);
+  showRoute(s);
+});
+$('insp-route-dur').addEventListener('input', () => {
+  const s = sel.getActive();
+  if (!s || !s.route) return;
+  s.route.duration = parseFloat($('insp-route-dur').value);
+  $('insp-route-dur-val').textContent = s.route.duration.toFixed(1) + 's';
+});
+// Esc abandons a route in progress; the previously saved one (if any) is left alone
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !sel.routing) return;
+  const s = sel.routing.sel;
+  sel.endRoute(false);
+  status('Route cancelled.');
+  showRoute(s);
+});
+sel.onRouteChange = () => { const s = sel.getActive(); if (s) showRoute(s); };
 $('btn-remove-motion').onclick = () => {
   const s = sel.getActive();
   if (!s) return;
@@ -985,6 +1111,14 @@ if (canvasWrap) {
   });
 }
 
+/*
+ * Motions extracted OFFLINE and shipped with the repo (tools/extract_cloth_flutter.py).
+ *
+ * They are `fromUpload: true` like anything captured in-session, because that is what
+ * they are — measured from a video, not a hand-authored preset — and the Extracted
+ * Motion panel is where a user looks for real motion. Failing to load one must not
+ * take the app down with it, so a miss is reported to the status line and skipped.
+ */
 renderMotionList();
 loadBlank();
 
