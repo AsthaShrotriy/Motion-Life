@@ -1,9 +1,26 @@
 """Tiny pose-extraction HTTP endpoint (stdlib only, no framework).
 
 POST /extract              raw video bytes in the body
-  ?kind=pose  (default)  -> MediaPipe Pose (BlazePose). Default response is BYTE-FROZEN
-                            for the app: { joints, fps:15, engine, detected, total,
+  ?kind=pose  (default)  -> MediaPipe Pose (BlazePose). Response shape is FROZEN for the
+                            app: { joints, fps, engine, detected, total, gait,
                             frames:[[ [x,y,c] x13 ] | null ] }.
+
+                            `fps` is the rate the frames were actually SAMPLED at, which
+                            is not always 15, and it is a FLOAT. It used to be hardcoded
+                            to 15 while the sampler decimates by `round(src_fps / 15)` —
+                            an integer step, so only a source at ~30fps (step 2) lands on
+                            15 exactly. Measured: a 24fps clip decimates to 11.988 and was
+                            labelled 15, and the animator plays a swatch at its stated
+                            fps, so it ran 25% fast. walk-man.mp4 is one of those clips
+                            (23.976fps), so this was wrong for the app's own fixture.
+
+                            `gait` is a MEASUREMENT of whether these frames contain a walk
+                            cycle a limb rig can follow — see _gait_coherence. A clip
+                            filmed head-on has no recoverable 2D stride, and the rig cannot
+                            tell that apart from a real one, so it is reported rather than
+                            left to look like a broken animator. Keys: score, walkable,
+                            period, foot_gap, periodicity, ankle_visibility, and a `note`
+                            present only when walkable is false.
   ?kind=pose&fmt=b       -> the same but as a Contract-B skeleton swatch (adds
                             viewpoint + gap-filled frames + confidence).
   ?kind=hands            -> MediaPipe Hands (0..2 hands x 21 landmarks) skeleton swatch.
@@ -24,6 +41,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from collections import Counter
 import cv2
+import numpy as np
 import mediapipe as mp
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -41,16 +59,7 @@ IDX = {"nose":0,"l_sho":11,"r_sho":12,"l_elb":13,"r_elb":14,"l_wri":15,"r_wri":1
 NAMES = list(IDX.keys())
 
 def extract(path):
-    cap = cv2.VideoCapture(path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    step = max(1, round(fps / 15))
-    raw, i = [], 0
-    while len(raw) < MAX_FRAMES:
-        ok, fr = cap.read()
-        if not ok: break
-        if i % step == 0: raw.append(fr)
-        i += 1
-    cap.release()
+    raw, eff_fps = _sample_frames(path)
     seq = []
     with MP.Pose(model_complexity=1, min_detection_confidence=0.5,
                  min_tracking_confidence=0.5) as pose:
@@ -65,12 +74,20 @@ def extract(path):
             seq.append([[round((pts[n][0]-x0)/bw,4), round((pts[n][1]-y0)/bh,4),
                          round(float(pts[n][2]),3)] for n in NAMES])
     good = [s for s in seq if s]
-    return {"joints":NAMES,"fps":15,"engine":"mediapipe_blazepose",
-            "detected":len(good),"total":len(seq),"frames":seq}
+    return {"joints":NAMES,"fps":eff_fps,"engine":"mediapipe_blazepose",
+            "detected":len(good),"total":len(seq),"gait":_gait_coherence(seq),
+            "frames":seq}
 
 
 # ── shared helpers (used by the kind=pose&fmt=b / hands / face extractors) ────
 def _sample_frames(path):
+    """Decimate a clip toward ~15fps. Returns (frames, effective_fps).
+
+    The step is an INTEGER (you cannot read half a frame), so the result only lands on 15
+    exactly when the source is ~30fps. Every caller must stamp the effective rate it gets
+    back rather than assuming 15 — the animator plays a pose swatch at its stated fps, so a
+    wrong stamp is a wrong playback speed, silently and for the whole clip.
+    """
     cap = cv2.VideoCapture(path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     step = max(1, round(fps / 15))
@@ -81,7 +98,139 @@ def _sample_frames(path):
         if i % step == 0: raw.append(fr)
         i += 1
     cap.release()
-    return raw
+    return raw, round(fps / step, 3)
+
+
+def _best_lag(v):
+    """Strongest PERIODICITY of a signal, as (correlation, lag_in_frames).
+
+    Autocorrelation asks how much the signal looks like itself shifted by L frames. A
+    repeating motion peaks at its period; noise peaks nowhere in particular.
+
+    The peak has to be a LOCAL MAXIMUM, not the largest value found. Autocorrelation starts
+    at 1.0 by definition and decays away from lag 0, so for any smooth signal the largest
+    value over a lag range is whatever the smallest lag in that range happens to be — that
+    measures smoothness, not repetition. An earlier version of this took the maximum and
+    duly reported a 3-frame "stride" at 0.89 for a man taking one step every 21 frames.
+    """
+    if len(v) < 8: return 0.0, 0
+    sd = float(v.std())
+    if sd < 1e-9: return 0.0, 0
+    v = (v - v.mean()) / sd
+    r = [float((v[:-L] * v[L:]).mean()) for L in range(1, len(v) // 2)]
+    best, lag = 0.0, 0
+    for i in range(1, len(r) - 1):
+        if r[i] > r[i - 1] and r[i] >= r[i + 1] and r[i] > best:
+            best, lag = r[i], i + 1        # r[i] is lag i+1
+    return round(best, 3), lag
+
+
+# How wide the feet must part, in the clip-normalized units _normalize_clip produces, before
+# a stride counts as visible in the image at all. Measured foot-gap swing on seven clips:
+# side-on runner 1.21, side-on walker 0.89, walk-man 0.43, dance 0.45, walk-grid 0.03,
+# head-on walker 0.03. 0.30 sits below every clip where a stride is actually visible and
+# well above the two where it is not.
+GAIT_GAP_MIN = 0.30
+# Score above which a limb rig has a real cycle to follow. Measured: 0.99 / 0.77 / 0.77 for
+# the three real gaits, 0.43 / 0.02 / 0.00 for dance, head-on and the grid clip. 0.6 sits in
+# that gap rather than next to either side of it.
+GAIT_WALKABLE_MIN = 0.6
+# Below this median visibility, MediaPipe is placing the ankles rather than seeing them, so a
+# small foot gap says nothing about the walk. Measured: 0.09 and 0.26 on a clip framed from
+# the waist up, against 0.82-0.99 on every clip with the feet in shot.
+GAIT_ANKLE_VIS_MIN = 0.5
+
+
+def _gait_coherence(frames):
+    """Do these frames contain a WALK CYCLE a limb rig can follow? Measured, not assumed.
+
+    Measured on ONE signal: the horizontal gap between the ankles, l_ank.x - r_ank.x.
+
+    That gap is the stride as the IMAGE sees it, which is the only stride the rig can
+    reproduce — it drives limb rotations from a 2D projection and has nothing else to read.
+    The gap also does the work three separate heuristics used to do badly:
+
+      * It is translation-free by construction. Both ankles carry the body's journey across
+        the frame, so subtracting one from the other removes it exactly. No detrending, no
+        polynomial fit, nothing to tune.
+      * It is the antiphase test. Feet that alternate contribute to the difference twice
+        over; feet that move together cancel. A head-on walk therefore reads as a small gap
+        without any special case for head-on.
+      * It is one signal, so "do the two ankles agree on a period" stops being a question.
+
+    Two numbers come out of it: how far the feet part (is there a stride in the image at
+    all) and how strongly that parting repeats (is it a cycle rather than drift). Measured
+    through this code on seven clips, gap swing then periodicity then score:
+
+        side-on walker  0.89  0.99  0.99      dance           0.45  0.43  0.43
+        side-on runner  1.21  0.77  0.77      head-on walker  0.03  0.19  0.02
+        walk-man        0.43  0.77  0.77      grid clip       0.03  0.00  0.00
+
+    The head-on walker is the case that prompted this. His feet never part in the image —
+    0.03 against 0.43 for the same walk seen from the side — because the stride happens
+    along the camera axis. MediaPipe sees his joints perfectly well (mean visibility 0.99);
+    there is simply no 2D swing to extract, and its own z does not rescue one either. The
+    rig cannot notice this: a track of jitter is still a track. So it is reported here
+    rather than left to look like a broken animator.
+
+    A small gap has two possible causes, so ankle visibility is measured too: a clip framed
+    from the waist up gives the same 0.03 gap as the head-on walk, but the fix is to get the
+    feet in shot, not to move the camera round.
+
+    Known limit: if the detector swaps left for right mid-clip the gap flips sign, which
+    reads as a break in the cycle and lowers the score. That is a false negative, not a
+    false positive — it under-claims, which is the safe direction for a warning.
+
+    The gap is in the units of whatever normalization produced `frames`. The thresholds here
+    were measured on _normalize_clip output (whole-clip scaling, which is what the app uses);
+    the per-frame bbox scaling of the legacy extract() inflates the gap, so the score there
+    is a looser bound. Verified to rank the same six clips in the same order on both paths.
+    """
+    good = [f for f in frames if f]
+    if len(good) < 12:
+        return {"score": 0.0, "period": 0, "foot_gap": 0.0, "periodicity": 0.0,
+                "walkable": False,
+                "note": "only %d detected frames — too few to look for a cycle" % len(good)}
+    jn = {n: i for i, n in enumerate(NAMES)}
+    gap = np.array([f[jn["l_ank"]][0] - f[jn["r_ank"]][0] for f in good], dtype=float)
+    swing = float(np.ptp(gap))
+    corr, lag = _best_lag(gap)
+    # Whether the ankles were SEEN at all. Without this a clip framed from the waist up looks
+    # identical to a head-on walk — both give a foot gap of 0.03 — and it would be told to
+    # re-film from the side when the fix is to get the feet in frame.
+    ank_vis = round(min(float(np.median([f[jn[s]][2] for f in good]))
+                        for s in ("l_ank", "r_ank")), 2)
+    # Both factors are necessary and neither substitutes for the other: a wide gap that never
+    # repeats is not a cycle, and a strong cycle in a gap of nothing is measuring jitter.
+    score = round(min(1.0, swing / GAIT_GAP_MIN) * max(0.0, corr), 3)
+    out = {"score": score, "period": lag if score else 0,
+           "foot_gap": round(swing, 3), "periodicity": corr, "ankle_visibility": ank_vis,
+           "walkable": score >= GAIT_WALKABLE_MIN}
+    if not out["walkable"]:
+        # Say which measurement failed, and say the number. The failures have different causes
+        # and different advice, and guessing at "film it from the side" for a clip that simply
+        # is not a walk would be a diagnosis dressed up from nothing.
+        if ank_vis < GAIT_ANKLE_VIS_MIN:
+            why = ("the ankles are barely visible (median visibility %.2f) — the detector is "
+                   "placing the feet, not seeing them" % ank_vis)
+            hint = ("Nothing can be recovered about a stride from feet that are out of shot. "
+                    "A FULL-BODY framing is what carries it.")
+        elif swing < GAIT_GAP_MIN:
+            why = ("the feet never part horizontally (gap swings %.2f, a visible stride needs "
+                   "about %.2f) — the stride is not in the image to extract" % (swing,
+                                                                               GAIT_GAP_MIN))
+            hint = ("A walk filmed HEAD-ON or from BEHIND puts the stride along the camera "
+                    "axis, where it barely projects into the picture. A view from the SIDE is "
+                    "what carries it.")
+        else:
+            why = ("the feet part but not on a repeating cycle (periodicity %.2f) — this looks "
+                   "like movement without a stride" % corr)
+            hint = ("A limb rig follows an alternating stride. Free movement — dancing, "
+                    "gesturing, shifting weight — gives it no cycle to lock onto.")
+        out["note"] = ("no walk cycle recoverable from this clip (score %.2f): %s. %s "
+                       "The rig will replay detection jitter instead of a walk."
+                       % (score, why, hint))
+    return out
 
 
 def _bbox_norm_xyz(lms):
@@ -238,7 +387,7 @@ def _reshape3(filled):
 
 def extract_pose_b(path):
     """Pose as a Contract-B skeleton swatch: viewpoint + gap-filled frames + confidence."""
-    sampled = _sample_frames(path)
+    sampled, eff_fps = _sample_frames(path)
     # Pixel aspect of the source, needed to undo MediaPipe's per-axis normalization.
     h0, w0 = (sampled[0].shape[:2] if sampled else (1, 1))
     aspect = (w0 / h0) if h0 else 1.0
@@ -264,14 +413,20 @@ def extract_pose_b(path):
     sw["frames"] = frames_b; sw["total"] = len(frames); sw["detected"] = detected
     sw["flags"] = flags; sw["interpolated"] = sum(1 for fl in flags if fl == "interp")
     sw["viewpoint"] = _viewpoint(raws); sw["confidence"] = round(conf, 3)
+    # The rate the frames were actually sampled at — see _sample_frames. The swatch default
+    # is 15, which is right only for a ~30fps source.
+    sw["fps"] = eff_fps
+    # Gait scored on the gap-filled frames, i.e. the ones a rig would actually play.
+    sw["gait"] = _gait_coherence(frames_b)
     return contracts.normalize_skeleton_swatch(sw)[0]
 
 
 def extract_hands(path):
     seq = []
+    sampled, eff_fps = _sample_frames(path)
     with MP_HANDS.Hands(static_image_mode=False, max_num_hands=2, model_complexity=1,
                         min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
-        for fr in _sample_frames(path):
+        for fr in sampled:
             res = hands.process(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB))
             if not res.multi_hand_landmarks:
                 seq.append(None); continue
@@ -286,6 +441,7 @@ def extract_hands(path):
     scores = [h["score"] for f in seq if f for h in f]
     sw = contracts.empty_skeleton_swatch("hands", "mediapipe_hands")
     sw["frames"] = seq; sw["total"] = len(seq); sw["detected"] = sum(1 for s in seq if s)
+    sw["fps"] = eff_fps          # the rate actually sampled, not 15 — see _sample_frames
     sw["flags"] = ['ok' if s else 'gap' for s in seq]   # hands are not gap-interpolated
     sw["confidence"] = round(sum(scores) / len(scores), 3) if scores else 0.0
     return contracts.normalize_skeleton_swatch(sw)[0]
@@ -293,9 +449,10 @@ def extract_hands(path):
 
 def extract_face(path):
     seq = []
+    sampled, eff_fps = _sample_frames(path)
     with MP_FACE.FaceMesh(static_image_mode=False, max_num_faces=1, refine_landmarks=False,
                           min_detection_confidence=0.5, min_tracking_confidence=0.5) as face:
-        for fr in _sample_frames(path):
+        for fr in sampled:
             res = face.process(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB))
             seq.append(_bbox_norm_xyz(res.multi_face_landmarks[0].landmark)
                        if res.multi_face_landmarks else None)
@@ -304,6 +461,7 @@ def extract_face(path):
     filled, flags = fill_gaps(flat)
     sw = contracts.empty_skeleton_swatch("face", "mediapipe_facemesh")
     sw["frames"] = _reshape3(filled); sw["total"] = len(seq); sw["detected"] = detected
+    sw["fps"] = eff_fps          # the rate actually sampled, not 15 — see _sample_frames
     sw["flags"] = flags; sw["interpolated"] = sum(1 for fl in flags if fl == "interp")
     # face has no per-point visibility; `confidence` here is detection COVERAGE, not
     # motion quality (labelled confidence_of='detection_ratio' in the swatch).
@@ -361,8 +519,15 @@ class H(BaseHTTPRequestHandler):
             # texture or a path swatch. fmt=legacy and fmt=b are untouched — the character
             # rig in js/ still reads fmt=legacy byte-for-byte.
             if fmt == "swatch" and out.get("kind") == "skeleton":
+                # A clip with no recoverable walk cycle is a WARNING about this swatch, so it
+                # travels in the field the UI already shows warnings from (the library chip
+                # reads swatch.warnings) rather than needing its own channel. The swatch is
+                # still built and still returned — the frames are real, they just are not a
+                # gait, and whether to use them anyway is the caller's call.
+                g = out.get("gait") or {}
+                warn = [g["note"]] if g.get("note") and not g.get("walkable") else []
                 out = contracts.skeleton_swatch(out, cls="articulated",
-                                                engine=out.get("engine", ""))
+                                                engine=out.get("engine", ""), warnings=warn)
                 ok, errs = contracts.validate_swatch(out)
                 if not ok:      # our own bug — report it in the payload, don't hide it
                     out["warnings"] = out["warnings"] + [

@@ -318,8 +318,17 @@ def empty_skeleton_swatch(subject, engine=""):
         "engine": engine,
         "joints": list(SUBJECT_JOINTS[subject]),
         "edges": [list(e) for e in SUBJECT_EDGES[subject]],
-        "fps": 15,
+        # A float, because a decimated clip lands on 15 only when the source is ~30fps: the
+        # sampler steps by whole frames, so 24fps decimates to 11.988. This used to be typed
+        # as an int and truncated 11.988 to 11 — an 8% playback error on every 24fps clip,
+        # since the animator plays a pose swatch at exactly its stated fps.
+        "fps": 15.0,
         "viewpoint": "unknown",
+        # Whether these frames contain a walk cycle a limb rig can follow — see
+        # pose_server._gait_coherence. None when nothing measured it. Carried on the payload
+        # because the rig cannot tell a gait from jitter (a track is a track either way), so
+        # the only place the difference can be reported is alongside the frames.
+        "gait": None,
         "detected": 0,          # frames with a REAL detection (never counts interpolated)
         "total": 0,
         "interpolated": 0,      # frames synthesised by short-gap interpolation
@@ -353,8 +362,12 @@ def normalize_skeleton_swatch(raw):
         warnings.append(f"unknown viewpoint {vp!r}; defaulted to unknown")
         vp = "unknown"
     out["viewpoint"] = vp
-    out["fps"] = int(_as_float(raw.get("fps"), 15)) or 15
+    out["fps"] = round(_as_float(raw.get("fps"), 15.0), 3) or 15.0
     out["confidence"] = round(_clamp01(_as_float(raw.get("confidence"), 0.0)), 3)
+    # A measurement the caller made about these frames, passed through as-is. Dropping it
+    # here is how it went missing before: the client asked for `gait` and always got null.
+    if isinstance(raw.get("gait"), dict):
+        out["gait"] = raw["gait"]
     if raw.get("confidence_of") in CONFIDENCE_MEANINGS:
         out["confidence_of"] = raw["confidence_of"]
     frames = raw.get("frames") if isinstance(raw.get("frames"), list) else []
