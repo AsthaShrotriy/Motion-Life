@@ -238,15 +238,6 @@ An uploaded SVG becomes selectable when objects are marked
 static backdrop. If neither is present (e.g. a flattened Illustrator export), the
 app falls back to wrapping top-level drawable clusters automatically.
 
-### The limb-rig contract
-
-Tag a figure's limb groups `data-limb="arm-r"` (etc.) with `data-pivot="x y"` at the joint,
-and a captured pose rotates each limb about that joint by the angle the same bone makes in
-the video — real per-limb articulation on ordinary Illustrator paths, rigid (0% shape
-distortion) and hierarchical (an arm rides the torso it hangs from). A limb the capture
-could not see holds its drawn pose rather than being mirrored from the other side.
-See `docs/LIMB_RIG.md` for the roles, the measurements, and the limitations.
-
 ---
 
 ## Technology

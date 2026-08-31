@@ -51,28 +51,28 @@ window.showSkeleton = function showSkeleton(videoUrl, pose, color = '#34d399') {
 
     const modal = document.createElement('div');
     modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;' +
-      'justify-content:center;background:rgba(6,10,16,.74);backdrop-filter:blur(3px)';
+      'justify-content:center;background:rgba(10,10,10,.74);backdrop-filter:blur(3px)';
     modal.innerHTML =
-      '<div style="background:#0f1620;border:1px solid #24303f;border-radius:14px;padding:16px;' +
+      '<div style="background:#161616;border:1px solid #333333;border-radius:14px;padding:16px;' +
       'box-shadow:0 20px 60px rgba(0,0,0,.5);max-width:92vw">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
-          '<div style="color:#dfe8f2;font:600 14px system-ui,-apple-system,sans-serif">' +
+          '<div style="color:#e8e8e8;font:600 14px system-ui,-apple-system,sans-serif">' +
             'Extracted motion → stick figure ' +
-            '<span style="color:#7d8da8;font-weight:400">· MediaPipe · ' + pose.joints.length +
+            '<span style="color:#9e9e9e;font-weight:400">· MediaPipe · ' + pose.joints.length +
             ' joints · ' + n + ' frames</span></div>' +
-          '<button class="sk-skip" style="background:#1d2735;color:#cfe;border:1px solid #2c3a4c;' +
+          '<button class="sk-skip" style="background:#262626;color:#e0e0e0;border:1px solid #3a3a3a;' +
             'border-radius:8px;padding:6px 12px;cursor:pointer;font:500 12px system-ui">Close ▸</button>' +
         '</div>' +
         '<div style="display:flex;gap:14px;align-items:stretch">' +
           '<div style="position:relative">' +
             '<video muted playsinline loop style="width:300px;height:300px;object-fit:cover;' +
               'border-radius:10px;background:#000;display:block"></video>' +
-            '<div style="position:absolute;left:8px;bottom:8px;color:#cfe;font:500 11px system-ui;' +
+            '<div style="position:absolute;left:8px;bottom:8px;color:#e0e0e0;font:500 11px system-ui;' +
               'background:rgba(0,0,0,.5);padding:2px 8px;border-radius:6px">source video</div>' +
           '</div>' +
           '<div style="position:relative">' +
             '<canvas width="600" height="600" style="width:300px;height:300px;border-radius:10px;' +
-              'background:#0a1017;border:1px solid #22303f;display:block"></canvas>' +
+              'background:#0f0f0f;border:1px solid #333333;display:block"></canvas>' +
             '<div style="position:absolute;left:8px;bottom:8px;color:#9fe6c8;font:500 11px system-ui;' +
               'background:rgba(0,0,0,.5);padding:2px 8px;border-radius:6px">extracted skeleton</div>' +
           '</div>' +

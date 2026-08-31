@@ -255,9 +255,10 @@ class Animator {
       s._routeT0 = t;
       s._routeT0Rev = s.route.rev;
     }
-    const p = ((t - s._routeT0) % (2 * dur)) / dur;   // 0 .. 2
-    let f = p <= 1 ? p : 2 - p;                      // ping-pong, so the loop never teleports
-    f = f * f * (3 - 2 * f);                         // smoothstep: sets out and returns as a gust
+    // Travel the route ONCE and hold at the end point — no ping-pong back to the start.
+    // (A future Play button will replay all motions + travel together on demand.)
+    const p = Math.min(1, (t - s._routeT0) / dur);   // 0 .. 1, clamped at the destination
+    const f = p * p * (3 - 2 * p);                    // smoothstep ease-in-out
     const [x, y] = this._routeAt(tbl, f);
     const dx = x - tbl.x0, dy = y - tbl.y0;          // the first point is wherever the object already is
     s.wrap.setAttribute('transform',

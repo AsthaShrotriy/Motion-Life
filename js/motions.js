@@ -85,6 +85,14 @@ class MotionLibrary {
     return motion;
   }
 
+  // remove a motion by id (used when a source video is deleted — its extracted
+  // motions go with it). Clears the selection if it was pointing at this motion.
+  remove(id) {
+    const i = this.motions.findIndex(m => m.id === id);
+    if (i >= 0) this.motions.splice(i, 1);
+    if (this.selectedId === id) this.selectedId = null;
+  }
+
   select(id) { this.selectedId = id; }
   getSelected() { return this.motions.find(m => m.id === this.selectedId) || null; }
 }

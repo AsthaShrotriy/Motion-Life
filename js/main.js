@@ -143,26 +143,13 @@ function makeChip(m, container) {
 function renderMotionList() {
   chipTiles.length = 0;
   motionListEl.innerHTML = '';
-  const extractedEl = $('extracted-list');
-  if (extractedEl) extractedEl.innerHTML = '';
 
   // Motion Presets: built-in motions only
   for (const m of library.getAll().filter(m => !m.fromUpload)) makeChip(m, motionListEl);
 
-  // Extracted Motion: one per video, in the same order as the Videos list
-  const extractedSection = $('extracted-section');
-  if (extractedSection) extractedSection.hidden = uploadedVideos.length === 0;
-  if (extractedEl) {
-    const shown = new Set();
-    for (const v of uploadedVideos) {
-      const m = v.motionId && library.getById(v.motionId);
-      if (m) { makeChip(m, extractedEl); shown.add(m.id); }
-    }
-    // any captured motion not tied to a video (e.g. multi-pick) still shows
-    for (const m of library.getAll().filter(m => m.fromUpload && !shown.has(m.id)))
-      makeChip(m, extractedEl);
-  }
-
+  // Extracted motions no longer get their own panel — they live in each video's
+  // dropdown, built inside renderVideoList() (which also appends their swatch
+  // chips to chipTiles, so it must run after the reset above).
   renderVideoList();
 }
 
@@ -177,19 +164,16 @@ function chipLoop() {
 
     // ---- character swatch: the extracted stick figure, looping ----
     if (pose && window.drawSkeletonFrame) {
-      ctx.fillStyle = '#0e1420'; ctx.fillRect(0, 0, S, S);
+      ctx.fillStyle = '#151515'; ctx.fillRect(0, 0, S, S);
       const n = pose.frames.length;
       const fi = Math.floor(t * pose.fps) % n;
-      // pad was S*0.17 — 34% of the tile was margin, so a standing figure (which
-      // only fills ~81% of its own normalized box on the tall axis) rendered at
-      // barely half the tile height. 0.06 keeps the joint dots off the edge.
       window.drawSkeletonFrame(ctx, pose.frames[fi], pose.joints, S, S,
-        { pad: S * 0.06, color: motion.color || '#34d399', lineWidth: Math.max(2, S * 0.02), jointR: Math.max(2, S * 0.02) });
+        { pad: S * 0.17, color: motion.color || '#34d399', lineWidth: Math.max(2, S * 0.02), jointR: Math.max(2, S * 0.02) });
       continue;
     }
 
     // motion-blur fade instead of clear → dots drag trails
-    ctx.fillStyle = 'rgba(26,27,42,0.28)';
+    ctx.fillStyle = 'rgba(24,24,24,0.28)';
     ctx.fillRect(0, 0, S, S);
 
     const cell = S / (GRID_N + 1);
@@ -484,39 +468,27 @@ function showInspector(s) {
     badge.textContent = m ? m.name : 'Unknown';
     badge.classList.add('assigned');
   } else { badge.textContent = 'None — select a motion'; badge.classList.remove('assigned'); }
+  // Speed / Intensity / Remove motion / Delete region only make sense once a motion is
+  // applied — hide them until then, so an object with no motion just shows its name and
+  // the "select a motion" prompt.
+  const hasMotion = !!s.motionId;
+  $('insp-speed').closest('.insp-row').hidden = !hasMotion;
+  $('insp-intensity').closest('.insp-row').hidden = !hasMotion;
+  $('btn-remove-motion').closest('.insp-actions').hidden = !hasMotion;
   showRetarget(s);
   showRoute(s);
   markLayerActive(s.wrap);
   showJudge(s);
 }
 
-/*
- * Rest-pose control. Only meaningful for a limb-rigged figure, so it stays hidden otherwise
- * rather than offering a dial that does nothing.
- *
- * "Keep the pose as drawn" adds the capture's per-frame delta on top of the artwork's own
- * stance. That is right when the drawing already stands like the clip, and wrong when it does
- * not: the reference boy is drawn mid-jump with his legs 56.8deg apart while the walking man's
- * rest 2.7deg apart, so his feet never pass each other no matter how far Intensity is pushed.
- * Matching the capture aligns each limb's rest to the bone's measured rest first — the drawing
- * keeps its art and proportions and adopts the subject's stance. See LIMB_RETARGET_DEFAULT.
- *
- * The hint reports the LARGEST offset whole-figure mode would apply to this figure, measured
- * from the live rig, because that one number is what decides whether the mode holds a drawing
- * together. Rotation here is rigid — no skinning — so a limb drawn to meet the torso at one
- * angle comes away from it once the offset is large: at 120deg the reference boy's arms fold
- * across his chest with nothing left at the shoulder. Better to show the number than to let the
- * user find that out by watching it happen.
- */
+/* Limb-retarget mode control — shown only for artwork with data-limb rig parts. */
 function showRetarget(s) {
   const row = $('insp-retarget-row');
   const limbs = s.wrap.querySelectorAll('[data-limb]').length;
   row.hidden = !limbs;
   if (!limbs) return;
-  // resolved exactly as _applyLimbs does, so the control cannot show a mode that is not in use
   $('insp-retarget').value = s.limbRetarget || s.wrap.dataset.retarget || LIMB_RETARGET_DEFAULT;
   let cost = '';
-  // only after a motion has been applied does the rig exist and the offsets with it
   const offs = s._limb && s._limb.offsets;
   if (offs && offs.length) {
     const worst = offs.reduce((a, b) => Math.abs(b.deg) > Math.abs(a.deg) ? b : a);
@@ -529,11 +501,7 @@ function showRetarget(s) {
     + ' but also preserves any splay the motion is too small to close.' + cost;
 }
 
-/*
- * Travel-route controls. A route is AUTHORED — hand-drawn points, not measured motion —
- * so the label says so plainly rather than sitting next to the extracted swatches as if it
- * came out of a video.
- */
+/* Travel-route controls — a route is AUTHORED (hand-drawn), not measured motion. */
 function showRoute(s) {
   const val = $('insp-route-val'), row = $('insp-route-dur-row');
   const drawing = sel.routing && sel.routing.sel === s;
@@ -608,7 +576,7 @@ function buildLayerNode(el, depth) {
   const kids = layerGroups(el);
   const caret = document.createElement('span');
   caret.className = 'layer-caret';
-  caret.textContent = kids.length ? '▾' : '';
+  caret.textContent = kids.length ? '▸' : '';   // groups start collapsed
 
   const eye = document.createElement('span');
   eye.className = 'layer-eye';
@@ -641,6 +609,7 @@ function buildLayerNode(el, depth) {
   if (kids.length) {
     childBox = document.createElement('div');
     childBox.className = 'layer-children';
+    childBox.style.display = 'none';   // collapsed by default; caret expands it
     for (const g of kids) childBox.appendChild(buildLayerNode(g, depth + 1));
     node.appendChild(childBox);
     caret.onclick = (e) => {
@@ -663,19 +632,21 @@ function buildLayerNode(el, depth) {
       const t = wrap.querySelector('path,rect,polygon,text,circle,ellipse') || wrap;
       t.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     };
+  } else if (el.tagName && el.tagName.toLowerCase() === 'g'
+             && (el.getAttribute('data-name') || el.id) && sel._isDrawable(el)) {
+    /* A NAMED container group (e.g. "Bird-1") whose leaf parts got wrapped individually.
+       The auto-wrapper skipped it (it prefers leaf-named parts, right for Illustrator
+       "Layer_1 > objects" but wrong when the container IS the object). Let the panel pick
+       the whole group as one region so you can apply a flock / wings motion to the bird. */
+    row.classList.add('group-selectable');
+    row.title = 'Select this whole group as one region';
+    row.onclick = () => { sel.selectGroup(el); };
   } else {
-    /* This row is NOT a selectable object, and until now it swallowed the click in
-       silence. regions.js only makes a group a unit if it carries the layer contract
-       (class="layer"/data-name) or a rig (see _hasRig) — an untagged container gets
-       passed over and its CHILDREN are wrapped instead. The trap is that the tree looks
-       byte-identical either way: the same "Boy · Left_Leg · …" rows appear whether or not
-       the file is tagged (measured on boy_grouped.svg vs assets/scenes/boy-limbs.svg),
-       so a dead click reads as a broken app rather than as an untagged group. Say which
-       it is. */
+    /* Truly not selectable (an unnamed <Group> with no drawable identity) — say so instead
+       of swallowing the click in silence. */
     row.classList.add('inert');
-    row.title = 'Not a selectable object: this group carries no class="layer"/data-name '
-              + 'and no rig, so the app wrapped its children instead. Click one of those, '
-              + 'or tag this group (see docs/LIMB_RIG.md).';
+    row.title = 'Not a selectable object: this group has no name and no rig, so the app '
+              + 'wrapped its children instead. Click one of those.';
   }
   return node;
 }
@@ -699,23 +670,22 @@ function markLayerActive(wrap) {
 $('insp-name').addEventListener('change', () => { const s = sel.getActive(); if (s) { s.name = $('insp-name').value; renderChips(); if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw(); } });
 $('insp-speed').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.speed = parseFloat($('insp-speed').value); $('insp-speed-val').textContent = s.speed.toFixed(1) + 'x'; } });
 $('insp-intensity').addEventListener('input', () => { const s = sel.getActive(); if (s) { s.intensity = parseFloat($('insp-intensity').value); $('insp-intensity-val').textContent = Math.round(s.intensity * 100) + '%'; } });
+
+// ---- limb retarget mode ----
 $('insp-retarget').addEventListener('change', () => {
   const s = sel.getActive();
   if (!s) return;
-  s.limbRetarget = $('insp-retarget').value;
-  // _applyLimbs keys its cached rig on the mode, so the next animated frame rebuilds on its
-  // own. Nothing is drawn here on purpose: pause() resets the artwork to its neutral, so
-  // painting a frame now would contradict a stopped animation.
+  s.limbRetarget = $('insp-retarget').value;   // _applyLimbs rebuilds its rig on the next frame
 });
 
-// ---- travel route ----
+// ---- travel route (authored) ----
 $('btn-draw-route').addEventListener('click', () => {
   const s = sel.getActive();
   if (!s) return;
   if (sel.routing) {
     const ok = sel.endRoute(true);
-    status(ok ? `Route saved on "${s.name}" — press Play to send it along.`
-              : 'Route needs at least one destination point.');
+    status(ok ? `Route saved on "${s.name}" — it's traveling now.`
+              : 'Route needs at least one destination point.', ok);
   } else if (sel.beginRoute()) {
     status(`Click across the canvas to lay out where "${s.name}" travels. ` +
            'Double-click to finish, Esc to cancel.');
@@ -744,6 +714,13 @@ document.addEventListener('keydown', (e) => {
   showRoute(s);
 });
 sel.onRouteChange = () => { const s = sel.getActive(); if (s) showRoute(s); };
+// a committed travel route is enough to animate on its own — start playback so the
+// object travels immediately, even with no preset motion applied.
+sel.onRouteCommitted = () => {
+  if (!animator.playing) animator.play();
+  if (typeof syncPlayButton === 'function') syncPlayButton();
+};
+
 $('btn-remove-motion').onclick = () => {
   const s = sel.getActive();
   if (!s) return;
@@ -761,6 +738,11 @@ $('btn-delete-region').onclick = () => { sel.deleteActive(); renderChips(); cons
 //  Tools
 // =========================================================================
 $('btn-tool-rect').onclick = () => { sel.setTool('rect'); $('btn-tool-rect').classList.add('active'); };
+
+// Individual selection: off by default. When on, clicking an already-selected group
+// again explodes it into one selection per child (each green) — see SelectionManager.
+const chkIndividual = $('chk-individual');
+if (chkIndividual) chkIndividual.onchange = () => sel.setIndividualMode(chkIndividual.checked);
 
 // =========================================================================
 //  Animator + play
@@ -827,12 +809,20 @@ function refreshHighlightsSoon() { if (sel.mode === 'svg') requestAnimationFrame
 const capture = new MotionCapture();
 $('btn-upload-motion').onclick = () => $('motion-input').click();
 
-// ---- Videos section: thumbnails of uploaded clips (same UI as motion chips) ----
+// ---- Videos section: one horizontal row per uploaded clip -------------------
+// Each row carries the clip and, in a collapsible dropdown, the motion swatch(es)
+// extracted from it (a clip can yield several). Three actions: reveal the motions,
+// preview (wired later), and delete (drops the clip AND its extracted motions).
 const uploadedVideos = [];
+const VR_ICON = {
+  chevron: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/></svg>',
+};
 function addVideoThumb(url, name) {
-  const rec = { url, name, motionId: null };
+  const rec = { url, name, motionIds: [] };
   uploadedVideos.push(rec);
-  renderVideoList();
+  renderMotionList();   // full rebuild keeps chipTiles (preset + swatch) consistent
   return rec;
 }
 function renderVideoList() {
@@ -840,21 +830,104 @@ function renderVideoList() {
   el.innerHTML = '';
   $('videos-section').classList.toggle('has-videos', uploadedVideos.length > 0);
   uploadedVideos.forEach(v => {
-    const chip = document.createElement('div');
-    const linked = v.motionId && v.motionId === library.selectedId;
-    chip.className = 'motion-chip video-chip' + (linked ? ' active' : '');
+    const row = document.createElement('div');
+    row.className = 'video-row';
+
+    // ---- top bar: big preview (video + name below) on the left, stacked actions on the right ----
+    const main = document.createElement('div');
+    main.className = 'video-row-main';
+
+    const preview = document.createElement('div');
+    preview.className = 'video-preview';
+
     const vid = document.createElement('video');
+    vid.className = 'video-thumb';
     vid.src = v.url; vid.muted = true; vid.loop = true; vid.autoplay = true;
     vid.playsInline = true; vid.setAttribute('playsinline', '');
-    chip.appendChild(vid);
+    preview.appendChild(vid);
+
+    const meta = document.createElement('div');
+    meta.className = 'video-meta';
     const nm = document.createElement('div');
-    nm.className = 'chip-name'; nm.textContent = v.name; nm.title = v.name;
-    chip.appendChild(nm);
-    // click a video → apply its extracted motion (and its swatch highlights)
-    if (v.motionId) chip.onclick = () => selectMotion(v.motionId);
-    el.appendChild(chip);
+    nm.className = 'video-name'; nm.textContent = v.name; nm.title = v.name;
+    const motions = (v.motionIds || []).map(id => library.getById(id)).filter(Boolean);
+    const sub = document.createElement('div');
+    sub.className = 'video-sub';
+    sub.textContent = motions.length
+      ? `${motions.length} motion${motions.length > 1 ? 's' : ''}` : 'extracting…';
+    meta.append(nm, sub);
+    preview.appendChild(meta);
+    main.appendChild(preview);
+
+    const actions = document.createElement('div');
+    actions.className = 'video-actions';
+    const btnDrop = document.createElement('button');
+    btnDrop.className = 'vr-btn'; btnDrop.title = 'Show extracted motions';
+    btnDrop.innerHTML = VR_ICON.chevron;
+    const btnPrev = document.createElement('button');
+    btnPrev.className = 'vr-btn'; btnPrev.title = 'Preview';
+    btnPrev.innerHTML = VR_ICON.eye;
+    const btnDel = document.createElement('button');
+    btnDel.className = 'vr-btn danger'; btnDel.title = 'Delete video and its motions';
+    btnDel.innerHTML = VR_ICON.trash;
+    actions.append(btnDrop, btnPrev, btnDel);
+    main.appendChild(actions);
+    row.appendChild(main);
+
+    // ---- dropdown body: the extracted motion swatches, hidden until opened ----
+    const drawer = document.createElement('div');
+    drawer.className = 'video-motions chip-grid';
+    drawer.hidden = true;
+    if (motions.length) motions.forEach(m => makeChip(m, drawer));
+    else {
+      const none = document.createElement('div');
+      none.className = 'video-motions-empty';
+      none.textContent = 'No motion extracted yet.';
+      drawer.appendChild(none);
+    }
+
+    btnDrop.onclick = () => {
+      const open = drawer.hidden;
+      drawer.hidden = !open;
+      btnDrop.classList.toggle('open', open);
+    };
+    btnPrev.onclick = () => {
+      const ms = (v.motionIds || []).map(id => library.getById(id)).filter(Boolean);
+      if (!ms.length) { status('No extracted motion to preview yet.'); return; }
+      if (window.previewExtraction) {
+        window.previewExtraction(v.url, ms.map(m => ({
+          trajectories: m.trajectories, color: m.color,
+          name: m.name, engine: m.engine, bbox: m.bbox,
+        })));
+      }
+    };
+    btnDel.onclick = () => deleteVideo(v);
+
+    row.appendChild(drawer);
+    el.appendChild(row);
     vid.play().catch(() => {});
   });
+}
+
+// Delete a clip and every motion extracted from it: detach those motions from any
+// region using them, drop them from the library, then forget the clip.
+function deleteVideo(rec) {
+  const ids = rec.motionIds || [];
+  for (const s of sel.selections) {
+    if (ids.includes(s.motionId)) { s.motionId = null; animator._resetOne(s); }
+  }
+  for (const id of ids) library.remove(id);
+  try { URL.revokeObjectURL(rec.url); } catch (_) {}
+  const i = uploadedVideos.indexOf(rec);
+  if (i >= 0) uploadedVideos.splice(i, 1);
+  syncArmedMotionToSelection();   // resets library selection + re-renders lists
+  renderChips();
+  if (sel.mode === 'svg') sel._renderSVGHighlights(); else sel.redraw();
+  const a = sel.getActive();
+  if (a) showInspector(a); else hideInspector();
+  status(ids.length
+    ? `Deleted video and ${ids.length} motion${ids.length > 1 ? 's' : ''}.`
+    : 'Deleted video.', true);
 }
 // (Step 10) synthFallTrajectories() used to live here: a hand-written sine-and-fall
 // field that js/upload.js played over any clip whose FILENAME matched /leaf|autumn/,
@@ -909,7 +982,7 @@ if (btnJudge) btnJudge.onclick = async () => {
   paint({ busy: 'Starting…' });
   const before = { ...(motion.params || {}) };
   try {
-    const linked = uploadedVideos.find(v => v.motionId === motion.id);
+    const linked = uploadedVideos.find(v => (v.motionIds || []).includes(motion.id));
     const res = await window.MotionJudge.tune({
       sel, animator, motion,
       sourceUrl: linked ? linked.url : null,
@@ -1111,14 +1184,6 @@ if (canvasWrap) {
   });
 }
 
-/*
- * Motions extracted OFFLINE and shipped with the repo (tools/extract_cloth_flutter.py).
- *
- * They are `fromUpload: true` like anything captured in-session, because that is what
- * they are — measured from a video, not a hand-authored preset — and the Extracted
- * Motion panel is where a user looks for real motion. Failing to load one must not
- * take the app down with it, so a miss is reported to the status line and skipped.
- */
 renderMotionList();
 loadBlank();
 

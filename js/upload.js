@@ -6,6 +6,11 @@
    Exposed as window.handleMotionUpload; main.js wires it to the #motion-input change
    event. main.js is IIFE-wrapped, so its symbols are NOT globals — it hands them across
    via window.__mlUpload, which we destructure at call time (not load time). */
+// Distinct, high-contrast colors so several motions from ONE clip read apart —
+// both in the multi-motion extraction reveal and as their saved library chips.
+// Cycled by extraction order.
+const MULTI_MOTION_COLORS = ['#7c6cff', '#34d399', '#ff8a4c', '#ff5c8a', '#3bc9ff', '#ffd166'];
+
 window.handleMotionUpload = async (e) => {
   // main.js is a separate IIFE-wrapped script; grab the shared helpers it exposes.
   const { $, status, capture, library, sel, renderMotionList, addVideoThumb,
@@ -16,11 +21,14 @@ window.handleMotionUpload = async (e) => {
   const videoUrl = URL.createObjectURL(file);
   const videoRec = addVideoThumb(videoUrl, file.name.replace(/\.[^.]+$/, ''));
 
-  // data-limb counts: a limb-rigged figure IS a rig (see docs/LIMB_RIG.md). Without it the
-  // status line calls a properly articulated figure an unrigged "whole-body puppet", which
-  // is the opposite of what _applyOne will actually do with it.
-  const wrapIsRig = (w) => w && ((w.matches && w.matches('[data-motion-mode="character"], [data-limb]')) ||
-                                 w.querySelector('[data-motion-mode="character"], [data-role="body"], [data-limb]'));
+  // Open the live extraction overlay right now — it stays up until extraction is done,
+  // playing the clip and drawing each motion field the moment it lands. `say()` mirrors
+  // a message to both the overlay's status pill and the panel's status line.
+  const reveal = window.startExtractionReveal ? window.startExtractionReveal(videoUrl) : null;
+  const say = (t) => { $('upload-status').textContent = t; if (reveal) reveal.setStatus(t); };
+
+  const wrapIsRig = (w) => w && ((w.matches && w.matches('[data-motion-mode="character"]')) ||
+                                 w.querySelector('[data-motion-mode="character"], [data-role="body"]'));
 
   // ===== VLM AUTO-ROUTE ==========================================================
   // The router LOOKS AT THE CLIP and picks the extractor — you don't declare the type.
@@ -54,7 +62,7 @@ window.handleMotionUpload = async (e) => {
         act0 ? `Router offline. "${act0.name}" is not the character.\n\nOK = BODY motion (MediaPipe) for the character.\nCancel = TEXTURE motion (RAFT) for "${act0.name}".`
              : 'Router offline. Extract BODY motion (MediaPipe) for the character?\n\nOK = character   ·   Cancel = abort');
       if (goChar) wantCharacter = true;
-      else if (!act0) { $('upload-status').textContent = 'Cancelled. Select an object first, then upload.'; e.target.value = ''; return; }
+      else if (!act0) { if (reveal) reveal.close(); $('upload-status').textContent = 'Cancelled. Select an object first, then upload.'; e.target.value = ''; return; }
     }
   }
 
@@ -67,14 +75,17 @@ window.handleMotionUpload = async (e) => {
     if (target && target !== act0) { sel.selectByIndex(sel.selections.indexOf(target)); showInspector(target); }
     if (!target) target = act0;   // may be null — that's fine
     const rigged = target && wrapIsRig(target.wrap);
-    $('upload-status').textContent = 'Extracting body motion with MediaPipe…' +
-      (target && !rigged ? ` (${target.name} isn't rigged → whole-body puppet)` : '');
+    say('Extracting body motion with MediaPipe…' +
+      (target && !rigged ? ` (${target.name} isn't rigged → whole-body puppet)` : ''));
     try {
       // (Step 7) fmt=swatch: one request gives BOTH the unified Contract-B swatch (for the
       // library) and, nested under .pose, the same {joints,fps,frames,detected,total} the
       // rig has always consumed. Verified byte-identical on walk-man.mp4; where they differ
       // it is because fmt=swatch gap-fills frames the detector missed, which the rig wants.
       const sw = await capture.captureCharacter(file, 'pose', 'swatch');
+      // character motion has no trajectory field to draw — close the overlay now that
+      // extraction has returned (before the skeleton view takes over).
+      if (reveal) reveal.finish();
       const pose = sw && (sw.pose || sw);          // tolerate a legacy response
       if (!pose || !pose.detected) {
         $('upload-status').textContent = 'No person detected — use a clear, full-body clip.';
@@ -89,7 +100,7 @@ window.handleMotionUpload = async (e) => {
         videoUrl, fromUpload: true, engine: 'mediapipe',
         swatches: sw && sw.kind === 'skeleton' ? [sw] : [],
       };
-      library.add(motion); videoRec.motionId = motion.id; renderMotionList();
+      library.add(motion); videoRec.motionIds = [motion.id]; renderMotionList();
       library.select(motion.id);
       if (window.showSkeleton) { try { await window.showSkeleton(videoUrl, motion.pose, motion.color); } catch (_) {} }
       if (target) {
@@ -101,6 +112,7 @@ window.handleMotionUpload = async (e) => {
         status(`Character motion "${name}" captured (MediaPipe). Click an object to apply it.`, true);
       }
     } catch (err) {
+      if (reveal) reveal.finish();
       $('upload-status').textContent = 'Pose service unreachable. Start it: service/pose_server.py (port 8770).';
     }
     e.target.value = ''; return;
@@ -125,7 +137,7 @@ window.handleMotionUpload = async (e) => {
     const added = [], failed = [];
     for (let i = 0; i < textureMotions.length; i++) {
       const m = textureMotions[i];
-      $('upload-status').textContent = `Multi-motion ${i + 1}/${textureMotions.length}: ${m.label} (${m.class})…`;
+      say(`Extracting ${i + 1}/${textureMotions.length}: ${m.label} (${m.class})…`);
       // per-region try/catch: the whole point of this branch is that one clip yields
       // SEVERAL swatches, so one region whose extractor is down (or whose mask came back
       // empty) must not throw away the regions that did extract. Failures are counted and
@@ -164,6 +176,16 @@ window.handleMotionUpload = async (e) => {
              A swatch that already knows its own class keeps it: _classOf prefers
              swatches[].class over motion.class. */
           if (!sw.class) sw.class = m.class || '';
+          // keep this motion's VLM region ([x,y,w,h] normalized) so the reveal can
+          // draw its bounding box over the clip.
+          sw.bbox = m.bbox;
+          // distinct color per motion (index = position so far), assigned here so the
+          // overlay can draw this field the moment it lands — one at a time, live.
+          sw.color = MULTI_MOTION_COLORS[added.length % MULTI_MOTION_COLORS.length];
+          if (reveal) reveal.addMotion({
+            trajectories: sw.trajectories, color: sw.color,
+            name: sw.name, engine: sw.engine, bbox: sw.bbox,
+          });
           added.push(sw);
         } else failed.push(`${m.label || m.class} (no motion found)`);
       } catch (err) {
@@ -171,13 +193,17 @@ window.handleMotionUpload = async (e) => {
         failed.push(`${m.label || m.class} (${err.message})`);
       }
     }
+    // extraction loop is done — colors/fields already streamed into the overlay live.
+    // Closing it here (sweep + fade) marks "extraction complete"; the labelling step
+    // below is a separate phase and runs while the overlay bows out.
+    if (reveal) reveal.finish();
     if (added.length) {
       added.forEach(sw => library.add(sw));
-      videoRec.motionId = added[0].id;
+      videoRec.motionIds = added.map(sw => sw.id);
       renderMotionList();
       const lost = failed.length ? ` · ${failed.length} failed: ${failed.join(', ')}` : '';
       $('upload-status').textContent =
-        `Extracted ${added.length} motions: ${added.map(s => `"${s.name}"`).join(', ')}${lost} — labelling the artwork…`;
+        `Extracted ${added.length} motions${lost} — labelling the artwork…`;
       // (Step 10) END TO END: the swatches now know their CLASS, so ask the VLM what each
       // artwork layer depicts and put each swatch on the layer that matches its class. No
       // filename, no layer-name matching. If the router is down autoApplyMotions returns
@@ -226,16 +252,16 @@ window.handleMotionUpload = async (e) => {
       // name BOTH when a path is requested — raft_small still extracts the field
       const via = routeOpts.engine || routeOpts.tracker
         || (routeOpts.path ? `${rt.engine} + raft_small` : 'raft_small');
-      $('upload-status').textContent = `VLM: ${routed.class} → routing to ${via}…`;
+      say(`Routing ${routed.class} → ${via}…`);
       console.log(`[MotionLife] VLM: ${routed.label} → class=${routed.class} `
         + `subject=${routed.subject_type} count=${routed.count} → extractor=${via} (${rt.kind}); ${rt.reason}`);
     }
   }
   if (!routeOpts.engine && !routeOpts.tracker) {
-    $('upload-status').textContent = 'Extracting texture motion with RAFT (optical flow)…';
+    say('Extracting texture motion with RAFT (optical flow)…');
   }
   capture.onProgress = (p, msg) => {
-    $('upload-status').textContent = msg || `Analyzing… ${Math.round(p * 100)}%`;
+    say(msg || `Analyzing… ${Math.round(p * 100)}%`);
   };
   try {
     const motion = await capture.captureFromFile(file, routeOpts);
@@ -246,6 +272,9 @@ window.handleMotionUpload = async (e) => {
       // `motion` variable is discarded — its trajectories/params are the
       // blended average, not what the user wants).
       if (motion.regions && motion.regions.length >= 2 && window.showMultiPick) {
+        // extraction produced regions; the picker takes over from here, so close the
+        // live overlay first (no double modal).
+        if (reveal) reveal.close();
         $('upload-status').textContent =
           `${motion.regions.length} motions detected — pick and name them.`;
         const picked = await showMultiPick(motion.videoUrl, motion.regions, {
@@ -260,7 +289,7 @@ window.handleMotionUpload = async (e) => {
           $('upload-status').textContent = 'No motions saved.';
         } else {
           for (const m of picked) library.add(m);
-          videoRec.motionId = picked[0].id;   // link the clip to its first motion
+          videoRec.motionIds = picked.map(m => m.id);   // link the clip to all its motions
           renderMotionList();
           const names = picked.map(m => `"${m.name}"`).join(', ');
           $('upload-status').textContent =
@@ -268,16 +297,21 @@ window.handleMotionUpload = async (e) => {
           status(`Added ${picked.length} motion${picked.length > 1 ? 's' : ''} — ${names}. Click one, then apply to an object.`, true);
         }
       } else {
-        // SINGLE-MOTION PATH (unchanged): the "wow" extraction moment only
-        // plays when there's really just one motion to celebrate.
-        if (motion.trajectories && motion.videoUrl && window.showExtraction) {
-          await showExtraction(motion.videoUrl, motion.trajectories, motion.params, motion.color);
+        // SINGLE-MOTION PATH: hand the one extracted field to the live overlay so it
+        // streaks over the clip, then close it. (This replaces the old post-extraction
+        // showExtraction popup — same visual, now part of the upload-to-done overlay.)
+        if (reveal) {
+          if (motion.trajectories) reveal.addMotion({
+            trajectories: motion.trajectories, color: motion.color,
+            name: motion.name, engine: motion.engine, bbox: routed ? routed.bbox : null,
+          });
+          reveal.finish();
         }
         // same fallback gap as the multi-motion branch above: keep the router's class when
         // the extraction dropped to Lucas–Kanade, so Step 8 still dispatches on the class
         // rather than on the layer the user happens to click.
         if (routed && routed.class && !motion.class) motion.class = routed.class;
-        library.add(motion); videoRec.motionId = motion.id; renderMotionList();
+        library.add(motion); videoRec.motionIds = [motion.id]; renderMotionList();
         $('upload-status').textContent = `Added "${motion.name}"`;
         status(`Motion "${motion.name}" captured from video — click it, then apply to an object.`, true);
       }
@@ -287,5 +321,6 @@ window.handleMotionUpload = async (e) => {
   } catch (err) {
     $('upload-status').textContent = 'Video error: ' + err.message;
   }
+  if (reveal) reveal.finish();   // safety: close the overlay on any texture-path exit
   e.target.value = '';
 };

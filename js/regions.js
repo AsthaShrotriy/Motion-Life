@@ -23,6 +23,11 @@
  */
 
 const REGION_COLORS = ['#6e5cff', '#ff5c8a', '#3ddc84', '#ffd93d', '#4cc9ff', '#ff8a4c', '#b84cff', '#5cffd6'];
+// Selection highlights use exactly two colors, by selection LEVEL, so the canvas
+// never turns into a rainbow: blue = a whole group/unit picked with a single click,
+// green = an individual child drilled into (double-click) or exploded out of a group.
+const GROUP_COLOR = '#4cc9ff';   // blue
+const CHILD_COLOR = '#3ddc84';   // green
 const SVGNS = 'http://www.w3.org/2000/svg';
 
 /* (Step 10) SURVIVING HARDCODING, GATED AND LABELLED.
@@ -100,8 +105,10 @@ class SelectionManager {
     this._svgDragOverHandler = null;
     this._svgDropHandler = null;
     this.hoveredWrap = null;
+    this.individualMode = false;     // when on, clicking an already-selected group explodes it into per-child selections
     this.routing = null;             // in-progress authored travel route, see beginRoute()
     this.onRouteChange = null;
+    this.onRouteCommitted = null;    // (sel) — fired when a route is committed, so the app can auto-play
     this.highlightsHidden = false;   // hide selection outlines during playback
     this._initRasterEvents();
   }
@@ -126,7 +133,15 @@ class SelectionManager {
       const wrap = this.resolveWrapForTarget(e.target);
       if (!wrap) { this.deselect(); return; }
       const existing = this.selections.findIndex(s => s.wrap === wrap);
-      if (existing >= 0) { this.selectByIndex(existing); return; }
+      if (existing >= 0) {
+        // Individual mode: clicking the already-active group a second time breaks
+        // it into a separate selection per child (each green), so motion can be
+        // assigned to them individually. Falls through to a normal reselect when
+        // the unit has no children to explode into.
+        if (this.individualMode && existing === this.activeIdx && this.explodeGroup(wrap)) return;
+        this.selectByIndex(existing);
+        return;
+      }
       this._createSVGSelection(wrap);
     };
     svg.addEventListener('click', this._svgClickHandler);
@@ -136,7 +151,18 @@ class SelectionManager {
     if (this._svgLeaveHandler) svg.removeEventListener('mouseleave', this._svgLeaveHandler);
     this._svgMoveHandler = (e) => {
       if (this.routing) { this.previewRoutePoint(e); return; }
-      const wrap = this.resolveWrapForTarget(e.target);
+      let wrap = this.resolveWrapForTarget(e.target);
+      // Once we've drilled into a child (double-click Birds → Bird-1), plain
+      // hover would re-resolve to the outer group and paint the whole group as
+      // if it were selected. If an existing selection's wrap sits under the
+      // cursor inside the resolved group, hover that instead so the highlight
+      // matches what's actually selected.
+      if (wrap) {
+        const deeper = this.selections.find(s =>
+          s.wrap !== wrap && wrap.contains(s.wrap) &&
+          (s.wrap === e.target || s.wrap.contains(e.target)));
+        if (deeper) wrap = deeper.wrap;
+      }
       if (wrap === this.hoveredWrap) return;
       this.hoveredWrap = wrap;
       this._renderSVGHighlights();
@@ -166,12 +192,31 @@ class SelectionManager {
     svg.addEventListener('dragleave', this._svgLeaveHandler);
     svg.addEventListener('drop', this._svgDropHandler);
 
-    // double-click finishes the route being drawn (a plain click would add one more point)
+    // double-click: while drawing a route it finishes the route; otherwise it drills one
+    // level DOWN into the group hierarchy toward the clicked part (Birds → Bird-1).
     if (this._svgDblHandler) svg.removeEventListener('dblclick', this._svgDblHandler);
     this._svgDblHandler = (e) => {
-      if (!this.routing) return;
-      e.preventDefault(); e.stopPropagation();
-      this.endRoute(true);
+      if (this.routing) { e.preventDefault(); e.stopPropagation(); this.endRoute(true); return; }
+      const parentWrap = this.resolveWrapForTarget(e.target, 0);
+      const childWrap = this.resolveWrapForTarget(e.target, 1);
+      if (!childWrap) return;
+      // a double-click is a click (which just selected the parent group) followed by the
+      // dblclick. When actually drilling in, drop that transient parent region — but only
+      // if it carries no motion — so we land on just "Bird-1", not "Birds" + "Bird-1".
+      if (childWrap !== parentWrap) {
+        const pIdx = this.selections.findIndex(s => s.wrap === parentWrap);
+        if (pIdx >= 0 && !this.selections[pIdx].motionId) {
+          this.selections.splice(pIdx, 1);
+          if (this.activeIdx >= pIdx) this.activeIdx = Math.max(-1, this.activeIdx - 1);
+        }
+      }
+      // the click that preceded this dblclick left the cursor hovering the outer
+      // group; retarget hover to the drilled child now so the whole-group hatch
+      // clears immediately instead of only when the cursor leaves the artwork.
+      this.hoveredWrap = childWrap;
+      const existing = this.selections.findIndex(s => s.wrap === childWrap);
+      if (existing >= 0) { this.selectByIndex(existing); return; }
+      this._createSVGSelection(childWrap, 'child');
     };
     svg.addEventListener('dblclick', this._svgDblHandler);
     this._svg = svg;
@@ -182,9 +227,19 @@ class SelectionManager {
    * by click, hover, and drag-over hit-testing so all three agree on what
    * "the object under the cursor" means.
    */
-  resolveWrapForTarget(target) {
+  resolveWrapForTarget(target, drill = 0) {
     const svg = this._svg;
     if (!svg) return null;
+
+    // GROUP-AWARE resolution. A single click / hover picks the OUTERMOST semantic group
+    // that isn't the whole artwork (e.g. "Birds"); a double-click (drill=1) steps one
+    // level down toward the clicked part (e.g. "Bird-1"). Without this, deeply-nested
+    // artwork (Birds > Bird-1 > Right Wing) lands on a lone wing on the first click.
+    const chain = this._groupChain(target);
+    if (chain.length && this._coverage(chain[0], svg) < 0.7) {
+      return this._wrapGroupExact(chain[Math.min(drill, chain.length - 1)]);
+    }
+
     let wrap = target.closest ? target.closest('.ms-wrap') : null;
     // Exported posters often put EVERYTHING in one layer group — wrapping
     // that gives a single selection covering the whole artwork, which reads
@@ -341,15 +396,51 @@ class SelectionManager {
     return wrap;
   }
 
+  /* The named-group ancestors of `target`, outermost first, e.g. [Birds, Bird-1].
+     .ms-wrap wrappers are transparent (skipped). Leading FULL-CANVAS container layers
+     (an Illustrator "Layer_1", a root wrapper) are dropped so the first entry is the
+     outermost SEMANTIC group, not the whole artwork — that keeps single-container
+     exports selecting their inner objects, exactly as before. */
+  _groupChain(target) {
+    const svg = this._svg;
+    const chain = [];
+    let cur = target;
+    while (cur && cur !== svg) {
+      if (cur.tagName && cur.tagName.toLowerCase() === 'g'
+          && !cur.classList.contains('ms-wrap')
+          && (cur.id || cur.getAttribute('data-name'))) {
+        chain.unshift(cur);
+      }
+      cur = cur.parentNode;
+    }
+    while (chain.length > 1 && this._coverage(chain[0], svg) > 0.7) chain.shift();
+    return chain;
+  }
+
+  /* Wrap EXACTLY this element as its own selectable .ms-wrap, even when it already sits
+     inside another .ms-wrap (so drilling into "Bird-1" works while "Birds" stays wrapped).
+     Reuses the wrap when `el` is already the sole child of one. */
+  _wrapGroupExact(el) {
+    const p = el.parentNode;
+    if (p && p.classList && p.classList.contains('ms-wrap') && p.childElementCount === 1) return p;
+    const wrap = document.createElementNS(SVGNS, 'g');
+    wrap.setAttribute('class', 'ms-wrap');
+    wrap.setAttribute('data-ms-name', el.getAttribute('data-name') || el.id || 'group');
+    el.parentNode.insertBefore(wrap, el);
+    wrap.appendChild(el);
+    return wrap;
+  }
+
   // ---- SVG selection ----
-  _createSVGSelection(wrap) {
+  _createSVGSelection(wrap, level = 'group') {
     const name = wrap.getAttribute('data-ms-name') || 'element';
     // bbox in the wrap's own coordinate space (wrap has no transform yet)
     const bb = wrap.getBBox();
     const sel = {
       id: 'sel-' + Date.now() + '-' + Math.round(bb.x),
       name,
-      color: REGION_COLORS[this.selections.length % REGION_COLORS.length],
+      level,                                                   // 'group' (blue) | 'child' (green)
+      color: level === 'child' ? CHILD_COLOR : GROUP_COLOR,
       kind: 'svg',
       wrap,
       center: [bb.x + bb.width / 2, bb.y + bb.height / 2],
@@ -360,6 +451,53 @@ class SelectionManager {
     this.activeIdx = this.selections.length - 1;
     this._renderSVGHighlights();
     if (this.onCreated) this.onCreated(sel, this.activeIdx);
+    return sel;
+  }
+
+  /* Select a whole NAMED GROUP as one region. The auto-wrapper prefers leaf-named parts
+     (so "Bird-1 > Right_Wing/Tail/…" gets its parts wrapped, not the bird), which is right
+     for Illustrator "Layer_1 > objects" but wrong when the container IS the object. The
+     Layers panel uses this so clicking "Bird-1" (or "Birds") picks the whole group as a
+     unit. Wraps on demand and activates; reuses an existing selection for the same group. */
+  selectGroup(el) {
+    if (!el || !this._isDrawable(el)) return null;
+    const wrap = this._wrapOne(el);
+    const idx = this.selections.findIndex(s => s.wrap === wrap);
+    if (idx >= 0) { this.selectByIndex(idx); return this.selections[idx]; }
+    return this._createSVGSelection(wrap);
+  }
+
+  // Toggle individual-selection mode. When on, clicking an already-selected group
+  // breaks it into a per-child selection (see the SVG click handler / explodeGroup).
+  setIndividualMode(v) { this.individualMode = !!v; }
+
+  /* Break a selected GROUP into one green child selection per drawable child, so each
+     part (Bird-1, Bird-2, …) can take its own motion. Returns the last child selection,
+     or null when the wrap has no separable children (a lone object — nothing to explode).
+     The group's own selection is dropped unless it already carries a motion. */
+  explodeGroup(groupWrap) {
+    // the semantic group element sits directly inside the .ms-wrap
+    const groupEl = groupWrap.firstElementChild || groupWrap;
+    const kids = [...groupEl.children].filter(el => this._isDrawable(el));
+    if (kids.length < 2) return null;
+
+    const gIdx = this.selections.findIndex(s => s.wrap === groupWrap);
+    if (gIdx >= 0 && !this.selections[gIdx].motionId) {
+      this.selections.splice(gIdx, 1);
+      if (this.activeIdx >= gIdx) this.activeIdx = Math.max(-1, this.activeIdx - 1);
+    }
+
+    let last = null;
+    for (const kid of kids) {
+      const w = this._wrapGroupExact(kid);
+      const existing = this.selections.findIndex(s => s.wrap === w);
+      if (existing >= 0) { last = this.selections[existing]; continue; }
+      last = this._createSVGSelection(w, 'child');   // sets activeIdx + renders each pass
+    }
+    // keep hover from re-painting the now-gone group as a whole
+    if (this.hoveredWrap === groupWrap) this.hoveredWrap = last ? last.wrap : null;
+    this._renderSVGHighlights();
+    return last;
   }
 
   // dashed highlight rect drawn INSIDE the svg so it moves with animation.
@@ -385,9 +523,40 @@ class SelectionManager {
 
     const hatchTags = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'text', 'tspan']);
 
-    const drawOutline = (wrap, color, { active, label: labelText, forWrap }) => {
+    const drawOutline = (wrap, color, { active, label: labelText, forWrap, plainFill }) => {
       const bb = wrap.getBBox();
       const tr = wrap.getAttribute('transform');
+
+      // hover uses a soft solid tint clipped to the silhouette instead of the
+      // busy diagonal hatch — calmer, and it reads the same for every object
+      // since hover always uses one fixed color (see hover call site below).
+      if (plainFill) {
+        const tint = wrap.cloneNode(true);
+        tint.removeAttribute('id');
+        tint.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+        tint.setAttribute('data-ms-hatch-for', forWrap);
+        const tintShape = (el) => {
+          el.removeAttribute('class');
+          el.removeAttribute('stroke');
+          el.style.fill = color;
+          el.style.fillOpacity = '0.18';
+        };
+        if (hatchTags.has(tint.tagName.toLowerCase())) tintShape(tint);
+        tint.querySelectorAll('*').forEach(el => {
+          if (hatchTags.has(el.tagName.toLowerCase())) tintShape(el);
+        });
+        tint.querySelectorAll('image').forEach(img => {
+          const rect = document.createElementNS(SVGNS, 'rect');
+          rect.setAttribute('x', img.getAttribute('x') || 0);
+          rect.setAttribute('y', img.getAttribute('y') || 0);
+          rect.setAttribute('width', img.getAttribute('width') || 0);
+          rect.setAttribute('height', img.getAttribute('height') || 0);
+          tintShape(rect);
+          img.replaceWith(rect);
+        });
+        if (tr) tint.setAttribute('transform', tr);
+        hl.appendChild(tint);
+      } else {
 
       // diagonal zig-zag hatch pattern, unique per highlighted object.
       // Each zig-zag line is drawn twice — a wider white halo underneath,
@@ -400,7 +569,10 @@ class SelectionManager {
       pattern = document.createElementNS(SVGNS, 'pattern');
       pattern.setAttribute('id', patternId);
       pattern.setAttribute('patternUnits', 'userSpaceOnUse');
-      const step = active ? 10 : 8;
+      // a lighter, less-dense hatch — the old active fill (step 10, full opacity)
+      // read as a heavy solid block over the object. The crisp colored outline below
+      // still marks the selection, so the fill only needs to be a soft tint.
+      const step = active ? 13 : 8;
       pattern.setAttribute('width', step);
       pattern.setAttribute('height', step);
       pattern.setAttribute('patternTransform', 'rotate(45)');
@@ -409,15 +581,15 @@ class SelectionManager {
       zigHalo.setAttribute('d', zigD);
       zigHalo.setAttribute('fill', 'none');
       zigHalo.setAttribute('stroke', '#ffffff');
-      zigHalo.setAttribute('stroke-width', active ? 3.5 : 3);
-      zigHalo.setAttribute('opacity', active ? 0.85 : 0.65);
+      zigHalo.setAttribute('stroke-width', active ? 3 : 3);
+      zigHalo.setAttribute('opacity', active ? 0.5 : 0.65);
       pattern.appendChild(zigHalo);
       const zig = document.createElementNS(SVGNS, 'path');
       zig.setAttribute('d', zigD);
       zig.setAttribute('fill', 'none');
       zig.setAttribute('stroke', color);
-      zig.setAttribute('stroke-width', active ? 1.75 : 1.25);
-      zig.setAttribute('opacity', active ? 1 : 0.8);
+      zig.setAttribute('stroke-width', active ? 1.4 : 1.25);
+      zig.setAttribute('opacity', active ? 0.6 : 0.8);
       pattern.appendChild(zig);
       hl.appendChild(pattern);
 
@@ -451,6 +623,7 @@ class SelectionManager {
       });
       if (tr) hatch.setAttribute('transform', tr);
       hl.appendChild(hatch);
+      }
 
       // thin outline tracing the exact silhouette on top, for definition —
       // a wider white halo copy first, then the region's color on top
@@ -502,9 +675,13 @@ class SelectionManager {
 
     if (this.hoveredWrap && this.hoveredWrap !== (active && active.wrap)) {
       const existing = this.selections.find(s => s.wrap === this.hoveredWrap);
-      const color = existing ? existing.color : '#2b2b3d';
-      drawOutline(this.hoveredWrap, color, {
+      // one fixed, soothing color for every hovered object — a soft lavender.
+      // Hover no longer borrows each region's own color (which made the highlight
+      // change hue object-to-object) and uses a light solid tint (plainFill)
+      // rather than the dense zig-zag hatch, so it reads as a calm wash.
+      drawOutline(this.hoveredWrap, '#b0a7e6', {
         active: false,
+        plainFill: true,
         label: existing ? existing.name + (existing.motionId ? ' ✓' : '') : (this.hoveredWrap.getAttribute('data-ms-name') || ''),
         forWrap: 'hover',
       });
@@ -698,7 +875,8 @@ class SelectionManager {
   endRoute(commit) {
     const r = this.routing;
     this.routing = null;
-    if (commit && r && r.pts.length >= 2) {
+    const committed = !!(commit && r && r.pts.length >= 2);
+    if (committed) {
       r.sel.route = {
         pts: r.pts,
         authored: true,          // hand-drawn, NOT measured — see the note above
@@ -709,7 +887,10 @@ class SelectionManager {
     }
     this._renderRoutes();
     if (this.onRouteChange) this.onRouteChange(null);
-    return !!(commit && r && r.pts.length >= 2);
+    // a committed route is motion enough on its own — let the app start playback so the
+    // travel shows immediately, without needing a preset motion applied first.
+    if (committed && this.onRouteCommitted) this.onRouteCommitted(r.sel);
+    return committed;
   }
 
   clearRoute(sel) {
@@ -820,3 +1001,5 @@ class SelectionManager {
 
 window.SelectionManager = SelectionManager;
 window.REGION_COLORS = REGION_COLORS;
+window.GROUP_COLOR = GROUP_COLOR;
+window.CHILD_COLOR = CHILD_COLOR;

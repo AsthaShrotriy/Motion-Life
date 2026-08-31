@@ -4,14 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MotionLife</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <script>(function(){var t=localStorage.getItem('ml-theme')||'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
-<link rel="stylesheet" href="css/style.css?v=69">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=95">
 </head>
 <body>
 <header>
   <div class="header-left">
+    <img src="img/logo.svg" class="brand-logo" alt="MotionLife logo">
     <h1>MotionLife</h1>
     <span class="tagline">Select an object. Apply a motion. Bring your art to life.</span>
   </div>
@@ -41,11 +45,6 @@
       <div id="upload-status"></div>
     </div>
 
-    <div class="panel-section" id="extracted-section" hidden>
-      <h2>Extracted Motion</h2>
-      <div id="extracted-list" class="chip-grid"></div>
-    </div>
-
     <div class="panel-section" id="library-section">
       <h2>Motion Presets</h2>
       <div id="motion-list" class="chip-grid"></div>
@@ -64,6 +63,10 @@
         <span class="sep"></span>
         <button id="btn-tool-rect" class="tool-btn active">□ Draw rectangle</button>
       </span>
+      <span class="sep"></span>
+      <label class="tool-toggle" title="Click a selected group again to break it into individually-selectable parts">
+        <input type="checkbox" id="chk-individual"> Individual selection
+      </label>
       <span class="sep"></span>
       <span class="tool-label">Regions:</span>
       <div id="region-chips"></div>
@@ -133,9 +136,6 @@
 
       <div class="panel-section" id="layers-section" hidden>
         <h2>Layers</h2>
-        <p class="judge-hint">Auto-label asks the VLM what each layer of the artwork
-          actually depicts, so extracted motion can be applied by what an object IS
-          rather than by what its layer is called. One vision call per press.</p>
         <div class="insp-actions">
           <button id="btn-autolabel">Auto-label layers</button>
         </div>
@@ -152,23 +152,24 @@
 
 <button id="theme-toggle" class="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">☀️</button>
 
-<script src="js/flow.js?v=69"></script>
-<script src="js/distill.js?v=69"></script>
-<script src="js/motions.js?v=69"></script>
-<script src="js/scenery.js?v=69"></script>
-<script src="js/poster.js?v=69"></script>
-<script src="js/regions.js?v=69"></script>
-<script src="js/motionfields.js?v=69"></script>
-<script src="js/animate.js?v=69"></script>
-<script src="js/export.js?v=69"></script>
-<script src="js/videoexport.js?v=69"></script>
-<script src="js/extractviz.js?v=69"></script>
-<script src="js/multipick.js?v=69"></script>
-<script src="js/skeletonviz.js?v=69"></script>
-<script src="js/capture.js?v=69"></script>
-<script src="js/autolabel.js?v=69"></script>
-<script src="js/judge.js?v=69"></script>
-<script src="js/upload.js?v=69"></script>
-<script src="js/main.js?v=69"></script>
+<script src="js/flow.js?v=95"></script>
+<script src="js/distill.js?v=95"></script>
+<script src="js/motions.js?v=95"></script>
+<script src="js/scenery.js?v=95"></script>
+<script src="js/poster.js?v=95"></script>
+<script src="js/regions.js?v=95"></script>
+<script src="js/motionfields.js?v=95"></script>
+<script src="js/animate.js?v=95"></script>
+<script src="js/export.js?v=95"></script>
+<script src="js/videoexport.js?v=95"></script>
+<script src="js/extractviz.js?v=95"></script>
+<script src="js/multiextract.js?v=95"></script>
+<script src="js/multipick.js?v=95"></script>
+<script src="js/skeletonviz.js?v=95"></script>
+<script src="js/capture.js?v=95"></script>
+<script src="js/autolabel.js?v=95"></script>
+<script src="js/judge.js?v=95"></script>
+<script src="js/upload.js?v=95"></script>
+<script src="js/main.js?v=95"></script>
 </body>
 </html>

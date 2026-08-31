@@ -1,11 +1,11 @@
 /* ---- DARK theme (default) ---- */
 :root {
-  --bg: #0d0d12;
-  --panel: #16161e;
-  --panel-edge: #2a2a36;
-  --surface: #1e1e28;
-  --text: #e8e8ee;
-  --muted: #9a9ab2;
+  --bg: #1e1e1e;
+  --panel: #2a2a2a;
+  --panel-edge: #3d3d3d;
+  --surface: #333333;
+  --text: #eaeaea;
+  --muted: #9e9e9e;
   --accent: #6e5cff;
   --accent-2: #ff5c8a;
   --good: #3ddc84;
@@ -13,30 +13,30 @@
   --radius: 10px;
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.35), 0 1px 3px rgba(0,0,0,0.45);
   --shadow-md: 0 6px 28px rgba(0,0,0,0.5);
-  --btn-hover: #2a2a38;
-  --btn-hover-edge: #3a3a4a;
-  --stage-bg: #0a0a0e;
-  --chip-bg: #101018;
-  --chip-name: #d9d9e6;
+  --btn-hover: #3a3a3a;
+  --btn-hover-edge: #4d4d4d;
+  --stage-bg: #181818;
+  --chip-bg: #2e2e2e;
+  --chip-name: #dedede;
 }
 
 /* ---- LIGHT theme (opt-in) ---- */
 :root[data-theme="light"] {
-  --bg: #f4f4f7;
+  --bg: #f5f5f5;
   --panel: #ffffff;
-  --panel-edge: #e5e5ea;
-  --surface: #f5f5f8;
-  --text: #1d1d22;
-  --muted: #6b6b7b;
+  --panel-edge: #d6d6d6;
+  --surface: #efefef;
+  --text: #2b2b2b;
+  --muted: #767676;
   --good: #1faa63;
   --warn: #d98a1f;
-  --shadow-sm: 0 1px 2px rgba(20,20,40,0.04), 0 1px 3px rgba(20,20,40,0.06);
-  --shadow-md: 0 4px 24px rgba(20,20,40,0.08);
-  --btn-hover: #ececf2;
-  --btn-hover-edge: #d4d4dc;
-  --stage-bg: #ececef;
-  --chip-bg: #1a1b2a;
-  --chip-name: #d9d9e6;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.07);
+  --shadow-md: 0 4px 24px rgba(0,0,0,0.09);
+  --btn-hover: #ebebeb;
+  --btn-hover-edge: #cfcfcf;
+  --stage-bg: #e2e2e2;
+  --chip-bg: #242424;
+  --chip-name: #dedede;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -44,7 +44,7 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
+  font-family: "Source Sans 3", "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -59,7 +59,8 @@ header {
   background: var(--panel);
   z-index: 20;
 }
-.header-left { display: flex; align-items: baseline; gap: 14px; }
+.header-left { display: flex; align-items: center; gap: 12px; }
+.brand-logo { width: 30px; height: 30px; display: block; flex-shrink: 0; }
 h1 {
   font-size: 20px; font-weight: 700;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
@@ -105,8 +106,6 @@ button:disabled { opacity: 0.4; cursor: default; }
 .videos-empty .ve-icon { color: var(--accent); opacity: 0.85; margin-bottom: 6px; }
 .videos-empty .ve-text { font-size: 12px; line-height: 1.5; }
 #videos-section.has-videos .videos-empty { display: none; }
-/* a video whose motion is currently selected */
-.video-chip.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,92,255,0.28); }
 .danger { color: var(--accent-2); border-color: var(--accent-2); }
 .danger:hover { background: rgba(255,92,138,0.1); }
 
@@ -129,41 +128,83 @@ main.right-collapsed { grid-template-columns: 280px 1fr 40px; }
   min-height: 0;
   overflow: hidden;
 }
-/* three stacked sections: Videos, Extracted Motion, Motion Presets */
-#videos-section, #extracted-section, #library-section {
+/* two stacked sections: Videos, Motion Presets */
+#videos-section, #library-section {
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding: 14px 14px 0;
 }
-#videos-section, #extracted-section { flex: 0 0 auto; }   /* compact, at the top */
-#extracted-section[hidden] { display: none; }             /* hidden until a video exists */
+#videos-section { flex: 0 0 auto; }                        /* compact, at the top */
 #library-section { flex: 1 1 0; }                          /* Presets: main scroller */
-#extracted-section, #library-section { border-top: 1px solid var(--panel-edge); }
+#library-section { border-top: 1px solid var(--panel-edge); }
 /* static headings; only the grids scroll */
-#videos-section > h2, #extracted-section > h2, #library-section > h2 { flex: 0 0 auto; }
-#video-list, #extracted-list { max-height: 30vh; overflow-y: auto; }
-#motion-list, #video-list, #extracted-list { min-height: 0; padding-bottom: 14px; }
+#videos-section > h2, #library-section > h2 { flex: 0 0 auto; }
+#video-list { max-height: 40vh; overflow-y: auto; overflow-x: hidden; }
+#motion-list, #video-list { min-height: 0; padding-bottom: 14px; }
 #motion-list { flex: 1 1 0; overflow-y: auto; }
+/* always-visible slim scrollbar for the library's scrollable lists (macOS overlay
+   scrollbars otherwise stay hidden until you scroll). NOTE: no `scrollbar-width` here —
+   setting it makes Chromium ignore ::-webkit-scrollbar and fall back to an overlay bar. */
+#video-list::-webkit-scrollbar, #motion-list::-webkit-scrollbar { width: 9px; }
+#video-list::-webkit-scrollbar-track, #motion-list::-webkit-scrollbar-track { background: transparent; }
+#video-list::-webkit-scrollbar-thumb, #motion-list::-webkit-scrollbar-thumb {
+  background: var(--panel-edge); border-radius: 5px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+#video-list::-webkit-scrollbar-thumb:hover, #motion-list::-webkit-scrollbar-thumb:hover {
+  background: var(--muted); background-clip: padding-box;
+}
 #videos-section > .upload-btn, #videos-section > #upload-status { flex: 0 0 auto; }
 /* motion swatches: fixed size, always 3 per row */
-#motion-list, #extracted-list {
+#motion-list {
   grid-template-columns: repeat(3, 76px);
   grid-auto-rows: min-content;
   align-items: start; justify-content: start;
 }
-/* video thumbnails: fixed size, always 2 per row */
-#video-list {
-  grid-template-columns: repeat(2, 118px);
+
+/* uploaded clips: stacked horizontal rows, each with actions + a motions dropdown */
+#video-list { display: flex; flex-direction: column; gap: 8px; }
+.video-row {
+  flex: 0 0 auto;          /* don't shrink to fit — overflow so #video-list scrolls */
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.video-row-main { display: flex; align-items: flex-start; gap: 10px; padding: 8px; }
+/* left: a big video with its name below it */
+.video-preview { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.video-thumb {
+  width: 100%; aspect-ratio: 16 / 10; flex: 0 0 auto;
+  border-radius: 6px; object-fit: cover; background: #000; display: block;
+}
+.video-meta { min-width: 0; }
+.video-name {
+  font-size: 12.5px; color: var(--text); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.video-sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+/* right: the three actions stacked vertically */
+.video-actions { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
+.vr-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border-radius: 6px; color: var(--muted);
+}
+.vr-btn:hover { color: var(--text); }
+.vr-btn.danger { color: var(--accent-2); border-color: transparent; }
+.vr-btn.danger:hover { background: rgba(255,92,138,0.12); }
+.vr-btn svg { transition: transform 0.15s; }
+.vr-btn.open svg { transform: rotate(180deg); }
+.video-motions {
+  padding: 8px; border-top: 1px solid var(--panel-edge);
+  grid-template-columns: repeat(3, 76px);
   grid-auto-rows: min-content;
-  align-items: start; justify-content: start; gap: 10px;
+  align-items: start; justify-content: start;
 }
-.video-chip { min-width: 0; }
-.video-chip video {
-  width: 100%; aspect-ratio: 1;
-  display: block; object-fit: cover;
-}
+.video-motions[hidden] { display: none; }
+.video-motions-empty { font-size: 11.5px; color: var(--muted); grid-column: 1 / -1; }
 #library-panel h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
 
 /* ---- right panel (collapsible): Properties + Layers ---- */
@@ -198,8 +239,7 @@ main.right-collapsed #right-panel { overflow: visible; }
 }
 .layer-row:hover { background: var(--surface); }
 .layer-row.active { background: rgba(110,92,255,0.16); color: var(--accent); }
-/* a group that never became a selectable unit — the row has no click to give (see
-   buildLayerNode); dim it so the tree stops looking like it is broken */
+/* untagged container rows: not selectable — dim + no pointer so it reads as "click a child" */
 .layer-row.inert { cursor: default; }
 .layer-row.inert:hover { background: none; }
 .layer-row.inert .layer-name { opacity: 0.45; font-style: italic; }
@@ -239,7 +279,7 @@ main.right-collapsed #right-panel { overflow: visible; }
   transition: transform 0.12s, box-shadow 0.15s;
 }
 .motion-chip:active { cursor: grabbing; }
-.motion-chip:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(20,20,40,0.18); }
+.motion-chip:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
 .motion-chip.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,92,255,0.25); }
 .motion-chip canvas { width: 100%; aspect-ratio: 1; display: block; }
 .chip-name {
@@ -268,7 +308,7 @@ main.right-collapsed #right-panel { overflow: visible; }
 /* ---- extraction moment modal ---- */
 .extract-modal {
   position: fixed; inset: 0; z-index: 200;
-  background: rgba(8, 8, 14, 0.88);
+  background: rgba(10, 10, 10, 0.88);
   display: flex; align-items: center; justify-content: center;
   animation: xm-in 0.25s ease;
 }
@@ -292,27 +332,93 @@ main.right-collapsed #right-panel { overflow: visible; }
   position: absolute; top: 18px; left: 20px;
   font-family: "SF Mono", ui-monospace, monospace;
   font-size: 14px; color: #fff;
-  background: rgba(10, 10, 18, 0.55);
+  background: rgba(12, 12, 12, 0.55);
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 10px; padding: 12px 16px;
   backdrop-filter: blur(6px);
   min-width: 190px;
 }
 .xr-row { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; }
-.xr-k { color: #9a9ab8; }
+.xr-k { color: #9e9e9e; }
 .xr-v { color: #7cffc4; font-weight: 600; font-variant-numeric: tabular-nums; }
 .extract-skip {
   position: absolute; bottom: 14px; right: 16px;
-  background: rgba(10,10,18,0.6); color: #cfcfe0;
+  background: rgba(12,12,12,0.6); color: #d0d0d0;
   border: 1px solid rgba(255,255,255,0.2); border-radius: 7px;
   padding: 6px 13px; font-size: 12.5px; cursor: pointer;
 }
 .extract-skip:hover { color: #fff; }
 
+/* ---- extraction reveal (extends .extract-modal / .extract-stage) ---- */
+/* near-opaque backdrop so the app behind (esp. the white blank canvas) doesn't
+   bleed through as a grey box */
+.mx-modal { background: rgba(10, 10, 10, 0.96); }
+/* layout: Skip on top, then [ video-stage | swatch-column ] side by side so the
+   extracted-motion swatches sit BESIDE the video, never overlapping it. The shell
+   is a card that HUGS its content, so there's no empty grey space around it. */
+.mx-shell {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  background: rgba(30, 30, 30, 0.98);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 16px; padding: 14px 16px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+}
+.mx-body { display: flex; gap: 14px; align-items: flex-start; }
+/* bigger video, but still leaves room for the 180px swatch column on narrow windows */
+.mx-modal .extract-stage { width: min(66vw, 780px, calc(94vw - 210px)); }
+.mx-modal .extract-skip { position: static; align-self: flex-start; }
+
+/* right column of extracted-motion swatches: an animated mini-canvas + caption per
+   motion, appearing one at a time as each field is extracted */
+.mx-swatches {
+  align-self: stretch; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; width: 180px;
+}
+.mx-swatches-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #fff; opacity: 0.85; text-shadow: 0 1px 6px rgba(0,0,0,0.6); padding: 0 2px 2px;
+}
+.mx-swatch {
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px;
+  background: rgba(12, 12, 12, 0.6); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 10px; padding: 6px; backdrop-filter: blur(6px);
+  opacity: 0; transform: translateX(10px);
+  animation: mx-sw-in 0.4s ease forwards;
+}
+@keyframes mx-sw-in { to { opacity: 1; transform: none; } }
+.mx-swatch canvas {
+  width: 100%; aspect-ratio: 16 / 10; height: auto; display: block;
+  border-radius: 6px; background: rgba(20, 20, 20, 0.7);
+}
+.mx-swatch-cap {
+  font-size: 11px; color: #eaeaea; text-align: center; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mx-swatch-cap .eng {
+  display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #a9a9a9;
+}
+/* live progress pill (bottom-center) + spinner; Skip moves to the top-right so
+   the two never collide */
+.mx-status {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px; max-width: 72%;
+  background: rgba(12, 12, 12, 0.6); border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px; padding: 7px 14px; color: #eaeaea; font-size: 12.5px;
+  backdrop-filter: blur(6px);
+}
+.mx-status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-spin {
+  width: 13px; height: 13px; border-radius: 50%; flex: 0 0 auto;
+  border: 2px solid rgba(255,255,255,0.25); border-top-color: #fff;
+  animation: mx-spin 0.8s linear infinite;
+}
+@keyframes mx-spin { to { transform: rotate(360deg); } }
+.mx-status-done .mx-spin { display: none; }
+
 /* ---- multi-motion picker modal ---- */
 .multipick-modal {
   position: fixed; inset: 0; z-index: 210;
-  background: rgba(8, 8, 14, 0.88);
+  background: rgba(10, 10, 10, 0.88);
   display: flex; align-items: center; justify-content: center;
   animation: xm-in 0.25s ease;
 }
@@ -321,7 +427,7 @@ main.right-collapsed #right-panel { overflow: visible; }
   width: min(94vw, 1120px);
   max-height: 90vh;
   display: flex; flex-direction: column;
-  background: #12121c;
+  background: #232323;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 14px;
   box-shadow: 0 30px 90px rgba(0,0,0,0.6);
@@ -333,9 +439,9 @@ main.right-collapsed #right-panel { overflow: visible; }
   border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 .mp-title { color: #fff; font-size: 15px; font-weight: 600; }
-.mp-sub { color: #9a9ab8; font-size: 12px; margin-top: 3px; }
+.mp-sub { color: #9e9e9e; font-size: 12px; margin-top: 3px; }
 .mp-close {
-  background: transparent; border: 0; color: #9a9ab8;
+  background: transparent; border: 0; color: #9e9e9e;
   font-size: 18px; cursor: pointer; padding: 4px 8px;
 }
 .mp-close:hover { color: #fff; }
@@ -371,16 +477,16 @@ main.right-collapsed #right-panel { overflow: visible; }
 .mp-card {
   display: flex; align-items: flex-start; gap: 12px;
   padding: 12px 14px;
-  background: #191925;
+  background: #2b2b2b;
   border: 1px solid rgba(255,255,255,0.08);
   border-left: 3px solid var(--region-color, #7c6cff);
   border-radius: 10px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
-.mp-card:hover { background: #1e1e2c; }
+.mp-card:hover { background: #333333; }
 .mp-card.soloed {
-  background: #202033;
+  background: #383838;
   border-color: rgba(255,255,255,0.28);
   border-left-color: var(--region-color);
   box-shadow: 0 0 0 2px rgba(124, 108, 255, 0.15);
@@ -399,7 +505,7 @@ main.right-collapsed #right-panel { overflow: visible; }
 }
 .mp-fields { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .mp-name {
-  background: #0f0f18;
+  background: #1a1a1a;
   color: #fff;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 6px;
@@ -413,23 +519,23 @@ main.right-collapsed #right-panel { overflow: visible; }
 .mp-params {
   display: flex; flex-wrap: wrap; gap: 4px 10px;
   font-family: "SF Mono", ui-monospace, monospace;
-  font-size: 11px; color: #9a9ab8;
+  font-size: 11px; color: #9e9e9e;
 }
-.mp-params b { color: #cfcfe0; font-weight: 600; }
+.mp-params b { color: #d0d0d0; font-weight: 600; }
 .mp-actions {
   display: flex; justify-content: space-between; align-items: center;
   padding: 14px 22px;
   border-top: 1px solid rgba(255,255,255,0.08);
-  background: #0f0f18;
+  background: #1a1a1a;
 }
-.mp-hint { color: #7a7a95; font-size: 12px; }
+.mp-hint { color: #7a7a7a; font-size: 12px; }
 .mp-actions-right { display: flex; gap: 10px; }
 .mp-cancel, .mp-save {
   padding: 8px 16px; border-radius: 7px; font-size: 13px;
   border: 1px solid rgba(255,255,255,0.16);
   cursor: pointer;
 }
-.mp-cancel { background: transparent; color: #cfcfe0; }
+.mp-cancel { background: transparent; color: #d0d0d0; }
 .mp-cancel:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
 .mp-save {
   background: var(--accent, #7c6cff); color: #fff; border-color: transparent;
@@ -485,6 +591,11 @@ main.right-collapsed #right-panel { overflow: visible; }
 .tool-btn { font-size: 12px; padding: 5px 10px; }
 .tool-btn.active { border-color: var(--accent); color: var(--accent); }
 .sep { width: 1px; height: 18px; background: var(--panel-edge); margin: 0 4px; }
+.tool-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--muted); cursor: pointer; user-select: none;
+}
+.tool-toggle input { accent-color: var(--accent); cursor: pointer; margin: 0; }
 
 #region-chips { display: flex; gap: 5px; flex-wrap: wrap; }
 .region-chip {
@@ -508,13 +619,6 @@ main.right-collapsed #right-panel { overflow: visible; }
   border-radius: 6px; color: var(--text); padding: 6px 9px; font-size: 13px;
 }
 .insp-row input[type="range"] { width: 100%; margin-top: 3px; accent-color: var(--accent); }
-.insp-row select {
-  width: 100%; background: var(--surface); border: 1px solid var(--panel-edge);
-  border-radius: 6px; color: var(--text); padding: 6px 9px; font-size: 12.5px;
-}
-/* why the choice matters, not just what it is — the wrong rest pose looks like a broken
-   applicator rather than a mismatched stance (see showRetarget) */
-.insp-hint { margin: 5px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
 .motion-badge {
   display: inline-block; font-size: 12px;
   background: var(--surface); border: 1px solid var(--panel-edge);
@@ -522,6 +626,7 @@ main.right-collapsed #right-panel { overflow: visible; }
 }
 .motion-badge.assigned { color: var(--accent); border-color: var(--accent); }
 .insp-actions { display: flex; gap: 6px; margin-top: 14px; }
+.insp-actions[hidden] { display: none; }
 
 /* ---- motion judge (Step 9) ---- */
 .judge-hint { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin: 0 0 4px; }
@@ -576,3 +681,10 @@ footer { padding: 7px 20px; border-top: 1px solid var(--panel-edge); }
   transition: background 0.15s, transform 0.12s;
 }
 .theme-toggle:hover { background: var(--btn-hover); transform: translateY(-1px); }
+
+/* ---- limb retarget + travel-route inspector controls (merged from Motion-Life-main) ---- */
+.insp-hint { margin: 5px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.insp-row select {
+  width: 100%; padding: 6px 8px; border-radius: 8px; font-size: 12px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--panel-edge);
+}
