@@ -344,6 +344,12 @@ const FILE_SCENES = {
   // where it 404'd into "Could not load that scene."
   train: 'assets/Artwork/train-window-adobe.svg',
   character: 'assets/scenes/character-bear.svg',
+  // Scene3 with the girl limb-rigged (tools/rig-figure.py). Like `train` this has no scene
+  // tab — reach it with loadScene('girl') from the console, or just upload the file. Without
+  // the rig a pose swatch cannot articulate her: she has no data-limb, so the animator falls
+  // through every pose gate to the generic texture path and the whole figure wobbles ~4px in
+  // place instead of walking.
+  girl: 'assets/scenes/girl-scene3.svg',
 };
 
 async function loadScene(name) {
