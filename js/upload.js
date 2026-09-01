@@ -11,6 +11,21 @@
 // Cycled by extraction order.
 const MULTI_MOTION_COLORS = ['#7c6cff', '#34d399', '#ff8a4c', '#ff5c8a', '#3bc9ff', '#ffd166'];
 
+/* BUILDER-FACING COPY AND CONTROLS, off by default.
+   Covers the ⚠ "no walk cycle in this clip" and ℹ "stride is along the camera axis" notes
+   the pose service measures per clip, and the Rest pose (retarget) row in the inspector.
+   All of it is for whoever is BUILDING with this tool, not for an audience watching it.
+   Nothing is discarded or disabled: the full measured note is always logged to the console,
+   `gait` still travels on the swatch and still steers the rig, retargeting still runs at its
+   default, and `?diag=1` (or window.__msDiag = true) puts every piece back on screen.
+   Exposed on window because main.js is a separate IIFE and gates its own rows with it. */
+const DIAG = (() => {
+  try { return new URLSearchParams(location.search).get('diag') === '1'; }
+  catch (_) { return false; }
+})();
+const showDiag = () => DIAG || window.__msDiag === true;
+window.__msShowDiag = showDiag;
+
 window.handleMotionUpload = async (e) => {
   // main.js is a separate IIFE-wrapped script; grab the shared helpers it exposes.
   const { $, status, capture, library, sel, renderMotionList, addVideoThumb,
@@ -43,19 +58,45 @@ window.handleMotionUpload = async (e) => {
   // The router LOOKS AT THE CLIP and picks the extractor — you don't declare the type.
   //   articulated (a body) -> MediaPipe skeleton   ·   everything else -> RAFT texture
   // If the router is down/unauthed it falls back to the manual selection heuristic.
-  let routed = null, allMotions = [];
-  try {
-    $('upload-status').textContent = 'Reading the clip with the VLM router…';
-    const contract = await capture.decomposeMotion(file);
-    if (contract && !contract.static && contract.motions && contract.motions.length) {
-      allMotions = contract.motions.slice().sort((a, b) => b.confidence - a.confidence);
-      routed = allMotions[0];
+  let routed = null, allMotions = [], routerErr = null;
+  // Two attempts, because the failure this guards against is TRANSIENT: the router is a
+  // plain HTTPServer in front of Bedrock, and Bedrock answers 503 "unable to process your
+  // request" under load. One 503 used to be indistinguishable from "no router", which sent
+  // a dance clip down the texture path. A second try costs one round-trip and recovers it.
+  for (let attempt = 0; attempt < 2 && !routed; attempt++) {
+    try {
+      $('upload-status').textContent = attempt
+        ? 'Router busy (503) — retrying…' : 'Reading the clip with the VLM router…';
+      const contract = await capture.decomposeMotion(file);
+      if (contract && !contract.static && contract.motions && contract.motions.length) {
+        allMotions = contract.motions.slice().sort((a, b) => b.confidence - a.confidence);
+        routed = allMotions[0];
+        routerErr = null;
+      } else if (contract && contract.static) {
+        break;                                  // a real reading: the clip is static
+      } else {
+        routerErr = capture.lastError || 'router returned no motions';
+      }
+    } catch (err) {
+      // NOT swallowed. This catch used to be `catch (_) {}`, so an unreachable or 503-ing
+      // router was silently identical to a router that had looked at the clip and said
+      // "texture" — and the whole upload then took the texture path with no trace on screen
+      // of the one thing that had actually failed.
+      routerErr = (err && err.message) || String(err);
     }
-  } catch (_) {}
+  }
+  if (routerErr) console.warn('[upload] VLM router unavailable:', routerErr);
 
   const act0 = sel.getActive();
   const manualRig = act0 && act0.kind === 'svg' && wrapIsRig(act0.wrap);
-  const sceneRig = document.querySelector('#artwork-container [data-motion-mode="character"]');
+  // EVERY rig tag, not just data-motion-mode="character". This lookup is the only thing
+  // standing between a rigged scene and a silent drop to RAFT when the router is down, and
+  // for a data-limb scene (the girl, the station) it could never match, so the confirm below
+  // never fired and the figure got a texture swatch: a whole-figure 1s bob where limbs
+  // should have articulated on the clip's own period. Measured on scene2-station with the
+  // router forced to 503 — no dialog, "2 motions detected", library empty of any skeleton.
+  const sceneRig = document.querySelector('#artwork-container ' +
+                     RIG_TAGS.split(',').map(s => s.trim()).join(', #artwork-container '));
   let wantCharacter;
   if (routed) {
     wantCharacter = (routed.class === 'articulated');
@@ -67,9 +108,22 @@ window.handleMotionUpload = async (e) => {
     // footgun confirm so a character scene never silently falls through to RAFT.
     wantCharacter = manualRig;
     if (!wantCharacter && sceneRig) {
+      const why = `Router unavailable (${routerErr || 'no reading'}).`;
+      // Name the FIGURE, not the tagged part. sceneRig is whichever rig tag matched first, and
+      // for a limb rig that is a leaf like "Left Leg" — offering to drive a leg reads as a bug.
+      const figName = (el) => {
+        let cur = el;
+        while (cur && cur.nodeType === 1 && cur.id !== 'artwork-container') {
+          if (!cur.getAttribute('data-limb') && (cur.getAttribute('data-name') || cur.id))
+            return cur.getAttribute('data-name') || cur.id;
+          cur = cur.parentNode;
+        }
+        return 'the rigged figure';
+      };
+      const rigName = figName(sceneRig);
       const goChar = confirm(
-        act0 ? `Router offline. "${act0.name}" is not the character.\n\nOK = BODY motion (MediaPipe) for the character.\nCancel = TEXTURE motion (RAFT) for "${act0.name}".`
-             : 'Router offline. Extract BODY motion (MediaPipe) for the character?\n\nOK = character   ·   Cancel = abort');
+        act0 ? `${why} "${act0.name}" is not a rigged figure.\n\nOK = BODY motion (MediaPipe) for ${rigName}.\nCancel = TEXTURE motion (RAFT) for "${act0.name}".`
+             : `${why} This artwork has a rig (${rigName}).\n\nExtract BODY motion (MediaPipe) for it?\n\nOK = rigged figure   ·   Cancel = abort`);
       if (goChar) wantCharacter = true;
       else if (!act0) { if (reveal) reveal.close(); $('upload-status').textContent = 'Cancelled. Select an object first, then upload.'; e.target.value = ''; return; }
     }
@@ -108,12 +162,32 @@ window.handleMotionUpload = async (e) => {
       // a false all-clear.
       const gait = pose.gait && typeof pose.gait === 'object' ? pose.gait : null;
       const noGait = gait && gait.walkable === false ? gait : null;
+      // The frames the rig will actually replay, and the root track kept IN STEP with them.
+      // `filter(Boolean)` renumbers the frames, so root has to be filtered by the same
+      // predicate or frame i is driven by the translation of some other frame — a body
+      // sliding out of time with its own limbs. Zipped rather than filtered separately.
+      const rootIn = Array.isArray(pose.root) ? pose.root : null;
+      const frames = [], root = [];
+      pose.frames.forEach((f, i) => { if (f) { frames.push(f); if (rootIn) root.push(rootIn[i] || [0, 0]); } });
       const motion = {
         id: 'char-' + Date.now(), name,
         desc: `Character motion · MediaPipe (${pose.detected}/${pose.total} frames)`
-              + (noGait ? `\n⚠ ${noGait.note}` : ''),
+              + (noGait && showDiag() ? `\n⚠ ${noGait.note}` : ''),
         color: '#34d399', character: true,
-        pose: { joints: pose.joints, fps: pose.fps, frames: pose.frames.filter(Boolean) },
+        // `gait` travels WITH the pose, not just into the warning text above: it carries
+        // stride_axis, which tells the rig whether this clip's stride is across the picture
+        // or along the camera axis. Dropping it here silently sent every head-on walk down
+        // the picture-plane path, where its legs swing 4deg instead of 52deg.
+        //
+        // `root` travels for the same reason, and it is the same bug twice: this object is
+        // rebuilt from a fixed key list, so a channel not named here is dropped in silence.
+        // root is the subject's TRANSLATION — the sway, the bob, the hop — which the hip
+        // anchoring subtracts out of `frames` (see pose_server._normalize_clip). Without it
+        // an uploaded clip animates limbs on a figure that never leaves its mark, which is
+        // exactly the "not prominent" it was reported as. Omitted, not zeroed, when the
+        // response has no root: absent means an older service, not a subject standing still.
+        pose: Object.assign({ joints: pose.joints, fps: pose.fps, frames, gait },
+                            rootIn ? { root, root_travel: pose.root_travel } : null),
         params: { frequency: 1, amplitude: 0.2, direction: 0, turbulence: 0, damping: 0, phaseSpread: 0 },
         videoUrl, fromUpload: true, engine: 'mediapipe',
         swatches: sw && sw.kind === 'skeleton' ? [sw] : [],
@@ -130,12 +204,28 @@ window.handleMotionUpload = async (e) => {
         status(`Character motion "${name}" captured (MediaPipe). Click an object to apply it.`, true);
       }
       if (noGait) {
-        // Said LAST so it is what stays on screen: the capture succeeded, and the thing the
-        // user needs to know is that what it captured is not a walk. Not flashed as success,
-        // and it reports the measurement rather than a verdict about their clip.
-        $('upload-status').textContent += `\n⚠ ${noGait.note}`;
-        status(`⚠ "${name}": no walk cycle in this clip (foot gap ${noGait.foot_gap}, `
-               + `repeat ${noGait.periodicity}) — the rig has jitter to replay, not a stride.`);
+        // Logged unconditionally — the measurement is the whole reason the service computes
+        // it, and losing it would leave a clip that animates like a broken animator with no
+        // explanation anywhere. On screen only under ?diag=1, and said LAST there so it is
+        // what stays up: the capture succeeded, and what it captured is not a walk. Not
+        // flashed as success, and it reports the measurement rather than judging the clip.
+        console.warn(`[motion] "${name}": no walk cycle recoverable — ${noGait.note}`);
+        if (showDiag()) {
+          $('upload-status').textContent += `\n⚠ ${noGait.note}`;
+          status(`⚠ "${name}": no walk cycle in this clip (foot gap ${noGait.foot_gap}, `
+                 + `repeat ${noGait.periodicity}) — the rig has jitter to replay, not a stride.`);
+        }
+      } else if (gait && gait.stride_axis === 'depth') {
+        // Not a warning — this clip DID yield a walk. But it came off the depth channel,
+        // which MediaPipe estimates less precisely than position, so say so rather than let
+        // a coarser stride read as the best the extractor can do.
+        console.info(`[motion] "${name}": stride along the camera axis — ${gait.note}`);
+        if (showDiag()) {
+          $('upload-status').textContent += `\nℹ ${gait.note}`;
+          status(`"${name}": stride is along the camera axis — legs driven from depth `
+                 + `(feet part ${gait.depth_gap} in depth vs ${gait.foot_gap} sideways). `
+                 + `A SIDE-ON clip gives a cleaner stride.`);
+        }
       }
     } catch (err) {
       if (reveal) reveal.finish();

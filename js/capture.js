@@ -41,10 +41,20 @@ class MotionCapture {
   async decomposeMotion(file) {
     try {
       const resp = await fetch(ROUTER_SERVICE_URL + '/decompose', { method: 'POST', body: file });
+      // The HTTP status was previously not looked at, so a 503 "Bedrock is unable to process
+      // your request" reached the caller as a plain null — indistinguishable from a router that
+      // had read the clip and found nothing. The caller decides whether a clip is a body or a
+      // texture on that distinction, so it has to be able to tell them apart.
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText || ''}`.trim());
       const j = await resp.json();
       if (j.error) throw new Error(j.error);
+      this.lastError = null;
       return j;
     } catch (e) {
+      // Kept on the instance rather than rethrown: every existing caller guards on a null
+      // return, and making this throw would change all of them. The reason is what was
+      // missing, not the control flow.
+      this.lastError = e.message;
       console.warn('[router] decompose unavailable:', e.message);
       return null;
     }

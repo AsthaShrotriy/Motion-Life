@@ -74,6 +74,76 @@ const LIMB_PARENT = {
   'shin-l': 'leg-l', 'shin-r': 'leg-r',
 };
 
+/*
+ * THE SEGMENT BELOW EACH LIMB — and what to do when the artwork does not have one.
+ *
+ * LIMB_BONES pairs arm-l with shoulder->elbow because that is the upper arm. But most artwork
+ * has no elbow: the suitcase's arm is a single stroke from its shoulder to its glove, and the
+ * girl has shins but no forearms. Driving a one-piece arm by the upper-arm sub-bone throws away
+ * every degree the elbow contributed, and in a wave that is nearly all of them. Measured on the
+ * three shipped clips, sub-bone vs the CHORD from the joint straight to the far tip:
+ *
+ *   clip                  arm-l         arm-r          leg-l         leg-r
+ *   WhatsApp 12.26 wave   34.5 -> 78.0  44.4 -> 86.8   35.5 -> 35.3  30.1 -> 32.8
+ *   dance-arms-overhead   91.7 -> 89.5  90.0 -> 88.2   16.1 -> 32.5  18.5 -> 24.6
+ *   walk-man              15.3 -> 13.9  21.8 -> 12.8   26.1 -> 31.3  28.6 -> 29.9
+ *
+ * The wave more than doubles, because its swing lives in the forearm. The dance's arms are
+ * unchanged (within 2.2deg) because that dancer's arms are straight, and its LEGS double —
+ * which is the same finding the dance swatch's own description records as "the visible knee
+ * lifts are SHIN flexion, which a thigh bone cannot carry". walk-man's right arm goes the other
+ * way, 21.8 -> 12.8: in a walk the elbow is bent and roughly cancels the shoulder, so the hand
+ * travels less than the upper arm does. That is not a bug to route around, it is what a rigid
+ * arm drawn shoulder-to-hand should do — and taking whichever number is larger would make the
+ * rig's geometry depend on the clip, which is not a rig.
+ *
+ * So: this is a fallback keyed on the ARTWORK, never on the clip. If the artist drew the child
+ * segment and it is tagged, each segment takes its own bone as before. Only when the child is
+ * absent does the parent stand in for the whole limb and follow the chord.
+ *
+ * ONE MORE GATE, and it is not an amplitude gate. A chord ends at a tip joint the capture may
+ * never see: in walk-man (a man walking AWAY, hands swinging in front of his hips) l_wri clears
+ * the visibility floor in 0 of 155 frames, median confidence 0.136, and r_wri in 31 of 155. With
+ * no usable frame the angle track holds 0 and the arm stops dead — measured on the suitcase, the
+ * chord took arm-l from 11.1deg of applied rotation to exactly 0.0. Losing swing to a cancelling
+ * elbow is the artwork's geometry being honest; losing it to a joint the capture never resolved
+ * is just missing data. So the chord is used only when its tip is visible in at least
+ * LIMB_CHORD_MIN_VIS of frames, and otherwise the sub-bone stands. That is keyed on whether the
+ * DATA EXISTS, not on which bone happens to swing further, so it still cannot be talked into
+ * picking the flattering number.
+ */
+const LIMB_CHILD = {
+  'arm-l': 'forearm-l', 'arm-r': 'forearm-r',
+  'leg-l': 'shin-l', 'leg-r': 'shin-r',
+};
+/* Half the clip. Below that the chord would be interpolated more than it is measured, and the
+ * sub-bone — whose joints these captures do resolve, 155/155 on both shoulders and elbows — is
+ * the better reading of a limb even though it is the shorter one. */
+const LIMB_CHORD_MIN_VIS = 0.5;
+
+/*
+ * WHICH ROLES READ THE DEPTH CHANNEL when the capture's stride is along the camera axis.
+ *
+ * A walk filmed head-on puts its whole stride into depth, where a 2D angle cannot see it.
+ * Measured on brisk-walk.mp4 (head-on, 62 frames): the thighs swing 3.5deg / 4.2deg in the
+ * picture plane against 52.1deg / 50.7deg in depth. The pose service says which axis actually
+ * carries the stride (gait.stride_axis) after testing that the legs alternate there; this is
+ * the list of roles that then follow it.
+ *
+ * LEGS ONLY, and that is measured too, not a hedge. Depth is a genuinely coarser estimate
+ * than position, so it is only worth taking where the picture plane has nothing:
+ *
+ *   role     picture plane            depth plane
+ *   thigh     3.5deg,  89% in band    52.1deg, 73% in band   <- depth wins, take it
+ *   arm-r     6.5deg,  47% in band   140.4deg, 52% in band   <- 140deg is a near-degenerate
+ *                                                               bone wrapping, not a swing
+ *
+ * Arm swing projects laterally from ANY viewpoint — which is why the arms measure the same
+ * ~15deg head-on and side-on, while only the legs collapse — so there was never anything for
+ * depth to recover in an arm. The head and torso have no stride in them at all.
+ */
+const LIMB_DEPTH_ROLES = new Set(['leg-l', 'leg-r', 'shin-l', 'shin-r']);
+
 /* MediaPipe's own visibility. Below this the landmark is an inference, not an observation. */
 const LIMB_VIS_OK = 0.5;
 
@@ -155,6 +225,80 @@ const LIMB_RETARGET_ROLES = /^(leg|shin)-/;  // what 'legs' covers
  * Measured against a 32x denser sweep (2048/subpath) on all six of the reference boy's limbs,
  * 64 is within 0.35deg on the worst of them — and it runs once per selection, not per frame. */
 const LIMB_TIP_SAMPLES = 64;
+
+/*
+ * ── BODY CHANNEL — the whole-figure motion the limb rig alone cannot carry ────────────────
+ *
+ * WHY THIS EXISTS. A figure driven by _applyLimbs rotates its arms and legs about their
+ * joints and nothing else, so a subject who sways across the floor comes out marching on the
+ * spot. That is not a shortfall of the artwork or of the detector — it is the extraction
+ * deleting the channel. pose_server._normalize_clip anchors every frame at the hip midpoint
+ * (it has to; the arms otherwise rescale the torso), and the anchor subtracts the subject's
+ * TRANSLATION. Measured on assets/videos/dance-arms-overhead.mp4, the dancer's hip centre
+ * travels 49.9% of a torso length sideways and 15.6% vertically, and in the shipped swatch
+ * both of those come back as a range of 0.0000.
+ *
+ * So the fix is not a bigger gain on the limbs. The service now ships the anchor it used to
+ * throw away as `pose.root`, and this reads it.
+ *
+ * FOUR CHANNELS, THREE OF WHICH WERE ALWAYS AVAILABLE. Only translation is destroyed by
+ * anchoring. Tilt (shoulder to shoulder) and squash (shoulder to hip) are DIFFERENCES within
+ * a single frame, so the anchor cannot touch them and they have been sitting in every pose
+ * swatch on disk unread. Measured on the same clip:
+ *
+ *   channel          source                       measured range      as shipped
+ *   sway   (x)       pose.root[i][0]              49.9% of torso      was 0.0000
+ *   bob    (y)       pose.root[i][1]              15.6% of torso      was 0.0000
+ *   tilt             shoulder line angle          48.3deg             present, unread
+ *   squash           torso length / its median    11.6%               present, unread
+ *
+ * UNITS. `root` is in the same normalized box as `frames`, and _normalize_clip fits the
+ * subject's whole extent into that box — so one unit is the subject's own height. Multiplying
+ * by the artwork figure's bbox height maps the sway onto a figure of any size, which is why
+ * the gains below are all 1.0: at gain 1 the drawing sways as far, relative to its own body,
+ * as the person did. `intensity` scales this exactly as it scales a limb swing.
+ */
+const BODY_SWAY_GAIN = 1.0;
+const BODY_BOB_GAIN = 1.0;
+/* Tilt is taken at less than life because a drawn figure is one rigid silhouette: the dancer's
+ * 48.3deg of shoulder roll is spread across a real spine, while here it pivots the entire body
+ * as a board. Half reads as a lean; full reads as falling over. Capped as well as scaled, for
+ * the same reason LIMB_DEG_MAX exists — one bad frame must not lay the figure flat. */
+const BODY_TILT_GAIN = 0.5;
+const BODY_TILT_MAX = 18;
+/* Squash is a NON-uniform scale, so it is the channel that actually deforms rather than
+ * moves. Held well under the measured 11.6% because scaling flat artwork stretches the ink
+ * itself, not just its outline — past about a tenth the strokes visibly thin out. */
+const BODY_SQUASH_GAIN = 0.6;
+const BODY_SQUASH_MAX = 0.10;
+/*
+ * JUMP. The vertical channel, on its own and amplified.
+ *
+ * Be clear about what is and is not extracted here. The dancer in the reference clip never
+ * leaves the ground — measured, 0 of 117 frames have both ankles off their floor — so her
+ * "jump" is a 15.6%-of-torso bounce, which on a 250px figure is about 8px and reads as
+ * nothing. This gain is AUTHORED. What comes from the video is the timing, the shape and the
+ * number of hops; the height does not. Anything that reports this as extracted height is
+ * lying, and the inspector labels it `jump (height x6)` for that reason.
+ *
+ * 3 is where the arc reads as a hop without reading as flight, on a figure whose own height
+ * sets the scale — 0.0321 box units x 3 x figure height is a rise of ~10% of the figure,
+ * against a real standing jump of roughly 25-30%. 6 was tried first and reported back as
+ * "jumping too much": on a small object like the cap, whose whole body is 79px, a rise of 19%
+ * of itself detaches it from the head it sits on, and the eye reads a launch rather than a
+ * bounce. The amount an object may leave its own footprint scales with how firmly the artwork
+ * plants it, not with the dancer's numbers, so this is the knob that gets tuned by looking.
+ */
+const BODY_JUMP_GAIN = 3.0;
+/* Squash coupled to height, opposed in sign: compressed at the bottom of the arc, stretched
+ * at the top. This is what actually reads as a jump — anticipation and landing carry it far
+ * more than altitude does, which is why the gain above can stay as low as it is.
+ *
+ * Note this clamp binds, it does not merely cap: at any gain worth using, (up/h)x1.6 exceeds
+ * it, so the number below IS the squash amplitude rather than a limit on it. Lowering the gain
+ * therefore does nothing to the deformation, and a cap that hops half as high while still
+ * stretching a sixth of its height reads as rubber. Halved alongside the gain for that reason. */
+const BODY_JUMP_SQUASH = 0.04;
 
 /* Shortest-arc normalisation to -180..180, sign preserved. */
 const deg180 = (d) => ((d + 180) % 360 + 360) % 360 - 180;
@@ -263,6 +407,33 @@ const closeLoop = (track) => {
   return track;
 };
 
+/*
+ * WHY A GAIT NEEDS TRIMMING BEFORE closeLoop, NOT JUST A BIGGER RAMP.
+ *
+ * closeLoop's note above reasons that "a genuinely cyclic bone already ends where it began,
+ * so there is nothing to subtract". That holds for a bone whose drift is real one-way slide.
+ * It does NOT hold for a clip cut mid-swing: a walk is perfectly cyclic and still ends far
+ * from where it started, because the recording stopped part-way through a stride. The drift
+ * closeLoop then measures is not slide to remove, it is phase — and subtracting it as a ramp
+ * tilts the whole track.
+ *
+ * Measured on brisk-walk (62 frames, ~4.4 stride cycles, legs driven from depth): the legs end
+ * 16.2deg from where they started, and the ramp needed to force that closed inflated the swing
+ * 21.0 -> 29.3deg (+39%) and REVERSED the cadence trend. The real stride accelerates, period
+ * 1.12s -> 1.00s; the ramped one decelerated, 0.83s -> 1.39s, and one of the eight half-cycles
+ * disappeared. That is a walk that no longer matches the video it came from.
+ *
+ * So drop the shortest tail that lets the loop close on its own, and leave the small remainder
+ * to closeLoop. The test is on the LEGS, whose alternation is what a stride cycle IS, and each
+ * leg is judged against its OWN range so the threshold means the same thing on a 20deg swing
+ * and a 50deg one. Measured: brisk-walk keeps 58/62 frames (94%, legs 20.1/18.9deg, cadence
+ * still rising 1.14 -> 1.01s); the side-on clip keeps 159/160 (99%, legs 42.6/51.4deg against
+ * 42.9/50.4 raw) — a clip that already looped cleanly barely moves. A rig with no usable leg
+ * pair, or one where no tail qualifies, keeps every frame and behaves exactly as before.
+ */
+const LIMB_LOOP_SEAM = 0.15;      // seam mismatch tolerated, as a fraction of that leg's range
+const LIMB_LOOP_MIN_KEEP = 0.55;  // never discard more of the clip than this to close a loop
+
 class Animator {
   constructor(selectionManager, motionLibrary) {
     this.sel = selectionManager;
@@ -359,10 +530,24 @@ class Animator {
       s._routeT0 = t;
       s._routeT0Rev = s.route.rev;
     }
-    // Travel the route ONCE and hold at the end point — no ping-pong back to the start.
-    // (A future Play button will replay all motions + travel together on demand.)
-    const p = Math.min(1, (t - s._routeT0) / dur);   // 0 .. 1, clamped at the destination
-    const f = p * p * (3 - 2 * p);                    // smoothstep ease-in-out
+    /*
+     * ONE-SHOT (default): travel the route once and hold at the end point — no ping-pong
+     * back to the start — eased in and out, because a journey with a start and a finish
+     * should not begin or end at full speed.
+     *
+     * LOOPING (route.loop, set by the Loop travel button): wrap round and go again, at a
+     * CONSTANT speed. The ease exists to soften a single arrival; on a loop there is no
+     * arrival to soften, and smoothstep would decelerate to a standstill at every lap seam
+     * and then pull away again — a visible hitch once per cycle that the drawn route never
+     * asked for. Linear also makes a CLOSED route (drawn back to its own first point) truly
+     * seamless. An open route still cuts back to the start each lap; that is inherent to
+     * looping a path that ends somewhere else, so the inspector measures the gap and says so
+     * rather than pretending the jump is not there.
+     */
+    const raw = (t - s._routeT0) / dur;
+    const loop = !!s.route.loop;
+    const p = loop ? raw - Math.floor(raw) : Math.min(1, raw);
+    const f = loop ? p : p * p * (3 - 2 * p);         // constant speed on a loop, else smoothstep
     const [x, y] = this._routeAt(tbl, f);
     const dx = x - tbl.x0, dy = y - tbl.y0;          // the first point is wherever the object already is
     s.wrap.setAttribute('transform',
@@ -1541,10 +1726,39 @@ class Animator {
           const l = f[jn[name === '@sho' ? 'l_sho' : 'l_hip']];
           const r = f[jn[name === '@sho' ? 'r_sho' : 'r_hip']];
           if (!l || !r) return null;
-          return [(l[0] + r[0]) / 2, (l[1] + r[1]) / 2, Math.min(l[2], r[2])];
+          const m = [(l[0] + r[0]) / 2, (l[1] + r[1]) / 2, Math.min(l[2], r[2])];
+          if (l.length > 3 && r.length > 3) m.push((l[3] + r[3]) / 2);
+          return m;
         }
         const i = jn[name];
         return i == null ? null : f[i];
+      };
+
+      /*
+       * Which horizontal axis carries this role's motion: the picture's x, or depth.
+       *
+       * Depth is a 4th value on each joint and is absent from older swatches, so this falls
+       * back to x whenever it is missing — a pose file captured before the service emitted
+       * depth animates exactly as it did before. The service only says 'depth' after
+       * measuring that the legs alternate there (see gait.stride_axis), so this is following
+       * a measurement, not guessing from the viewpoint label.
+       */
+      const strideAxis = (pose.gait || {}).stride_axis;
+      const hasDepth = frames.length > 0 && frames[0].some(p => p && p.length > 3);
+      const useDepth = strideAxis === 'depth' && hasDepth;
+      const axisFor = role => (useDepth && LIMB_DEPTH_ROLES.has(role)) ? 3 : 0;
+
+      // How much of the clip actually resolved both ends of a bone. Used to decide whether a
+      // one-piece limb may follow its chord (see LIMB_CHORD_MIN_VIS) — a tip joint the capture
+      // never saw would otherwise freeze the limb rather than merely shorten its swing.
+      const visFrac = (bone) => {
+        if (!frames.length) return 0;
+        let n = 0;
+        for (const f of frames) {
+          const p = jointAt(f, bone[0]), q = jointAt(f, bone[1]);
+          if (p && q && Math.min(p[2], q[2]) >= LIMB_VIS_OK) n++;
+        }
+        return n / frames.length;
       };
 
       const bbOf = el => { try { return el.getBBox(); } catch (_) { return null; } };
@@ -1625,18 +1839,33 @@ class Animator {
       const limbs = [];
       for (const el of wrap.querySelectorAll('[data-limb]')) {
         const role = el.dataset.limb;
-        const bone = LIMB_BONES[role];
+        // One rigid segment spans the WHOLE limb, so it follows the chord to the far tip rather
+        // than its first sub-bone — see LIMB_CHILD. Keyed on whether the artist tagged the child
+        // segment, so a rig that does have a forearm is untouched, and only taken when the
+        // capture actually resolved the tip.
+        const kid = LIMB_CHILD[role];
+        let bone = LIMB_BONES[role];
+        if (kid && LIMB_BONES[kid] && !wrap.querySelector(`[data-limb="${kid}"]`)) {
+          const chord = [bone[0], LIMB_BONES[kid][1]];
+          if (visFrac(chord) >= LIMB_CHORD_MIN_VIS) bone = chord;
+        }
         const b = bbOf(el);
         if (!bone || !b) continue;                      // unknown role: leave it alone
 
         // ---- the bone's angle track, with both gates ----
+        // The length gate is measured in the SAME plane as the angle. A gate in a different
+        // plane can reject a frame the angle is fine in — a leg foreshortened in x may be
+        // fully extended in depth, which is exactly the case depth exists to handle.
+        // Measured, this costs nothing either way: 0 of 62 frames gated in both planes on
+        // brisk-walk, 0 of 534 on walk-man-side (one bone, shin-l, gates 8 frames in depth).
+        const ax = axisFor(role);
         const lens = [], angs = [];
         for (const f of frames) {
           const p = jointAt(f, bone[0]), q = jointAt(f, bone[1]);
           if (!p || !q) { lens.push(null); angs.push(null); continue; }
-          const L = Math.hypot(q[0] - p[0], q[1] - p[1]);
+          const L = Math.hypot(q[ax] - p[ax], q[1] - p[1]);
           lens.push(Math.min(p[2], q[2]) >= LIMB_VIS_OK ? L : null);
-          angs.push(Math.atan2(q[1] - p[1], q[0] - p[0]));
+          angs.push(Math.atan2(q[1] - p[1], q[ax] - p[ax]));
         }
         const seen = lens.filter(v => v != null).sort((x, y) => x - y);
         const medLen = seen.length ? seen[Math.floor(seen.length / 2)] : 0;
@@ -1708,10 +1937,40 @@ class Animator {
         }
       }
 
+      /*
+       * Trim to the longest self-closing loop FIRST, so closeLoop only ever has a small
+       * remainder to flatten — see the LIMB_LOOP_SEAM note. Judged on the legs, because a
+       * stride cycle is defined by their alternation; a rig with no usable leg pair keeps
+       * every frame, which is what every non-walking capture did before this existed.
+       */
+      const nFull = frames.length;
+      let nKeep = nFull;
+      const legPair = ['leg-l', 'leg-r'].map(r => byRole.get(r))
+        .filter(g => g && g.usable && g.track.length === nFull);
+      if (legPair.length === 2) {
+        const spans = legPair.map(g => {
+          let lo = Infinity, hi = -Infinity;
+          for (const v of g.track) { if (v < lo) lo = v; if (v > hi) hi = v; }
+          return hi - lo;
+        });
+        if (spans.every(r => r > 0)) {
+          const floor = Math.max(4, Math.round(nFull * LIMB_LOOP_MIN_KEEP));
+          for (let nn = nFull; nn >= floor; nn--) {
+            if (legPair.every((g, k) =>
+                Math.abs(g.track[nn - 1] - g.track[0]) <= LIMB_LOOP_SEAM * spans[k])) {
+              nKeep = nn; break;
+            }
+          }
+        }
+      }
+      // Every limb has to end on the same frame or they would drift out of step with each
+      // other, so the trim chosen from the legs is applied to all of them.
+      if (nKeep < nFull) for (const g of limbs) g.track.length = nKeep;
+
       // The clip is not cyclic and the animation loops it, so the drift has to come out or it
-      // comes out all at once at the seam — see closeLoop. After mirroring, on the final
-      // signed track, and before restDeg is used, since closeLoop preserves the mean it is a
-      // circular mean of.
+      // comes out all at once at the seam — see closeLoop. After mirroring and trimming, on
+      // the final signed track, and before restDeg is used, since closeLoop preserves the mean
+      // it is a circular mean of.
       for (const g of limbs) closeLoop(g.track);
 
       /* Retarget only where there is something real to retarget to. A limb with no usable
@@ -1723,6 +1982,36 @@ class Animator {
       for (const g of limbs) g.retarget = !!(g.usable && g.drawn != null && wanted(g.role));
       const order = [...limbs].sort((a, b) => a.chain.length - b.chain.length);
 
+      /*
+       * THE STATIC PART OF RETARGETING IS ONLY MEANINGFUL WHEN BOTH ANGLES ARE IN THE SAME
+       * PLANE, AND FOR A DEPTH-DRIVEN ROLE THEY ARE NOT.
+       *
+       * restDeg is measured on axisFor(role): the picture plane normally, but the DEPTH plane
+       * for a leg or shin once the service reports a head-on stride. drawn is always the
+       * picture plane — it is read off the artwork, which has no depth. Subtracting one from
+       * the other is only valid when the two planes happen to agree.
+       *
+       * Measured on brisk-walk (62 frames, head-on): in the picture plane every bone rests
+       * straight down — thighs 91.1/87.9deg, shins 95.0/85.0. In the depth plane the THIGHS
+       * still read 83.3/84.5, which is why this was invisible while thighs were the only
+       * depth-driven role: the offset came out 0.1deg and 1.7deg. The SHINS read 53.9/56.8 —
+       * a 30-38deg lean that is MediaPipe's coarse z, not a posture. Retargeting to it put a
+       * permanent 36-40deg bend in the girl's knees: they measured 15..52deg of flex and never
+       * once straightened.
+       *
+       * So a depth-driven role keeps the SWING (deltas about its own rest, both in the same
+       * plane, which is sound) and drops the static offset. It must NOT simply stop
+       * retargeting: the non-retarget path does not subtract ancestors, and a shin's track is
+       * an ABSOLUTE bone angle that already contains its thigh's rotation, so the thigh would
+       * be applied to it twice. Keeping the offset at zero preserves the subtraction.
+       *
+       * Thighs are unaffected either way (0.1/1.7deg), so no previously measured figure moves.
+       */
+      for (const g of limbs) {
+        g.restOffset = (g.drawn == null) ? 0
+          : (axisFor(g.role) === 0 ? deg180(g.restDeg - g.drawn) : 0);
+      }
+
       /* What 'all' WOULD cost this figure, whatever mode is actually in force: each limb's
        * one-off offset with the swing at zero, resolved the same way (see the own-rotation
        * note below). This is the number that decides whether whole-figure retargeting holds a
@@ -1733,10 +2022,12 @@ class Animator {
         if (!g.usable || g.drawn == null) continue;
         let acc = 0;
         for (const p of g.chain) acc += offsets.get(p) || 0;
-        offsets.set(g, deg180(g.restDeg - g.drawn - acc));
+        offsets.set(g, deg180(g.restOffset - acc));
       }
 
-      s._limb = { limbs, order, fps: pose.fps || 15, n: frames.length, mirror, mode,
+      // n is the PLAYED length, which is the trimmed one — the frames past the loop point are
+      // deliberately not shown, so playback must not index into them.
+      s._limb = { limbs, order, fps: pose.fps || 15, n: nKeep, captured: nFull, mirror, mode,
                   offsets: [...offsets].map(([g, deg]) => ({ role: g.role, deg })) };
       s._limbMotion = motion.id;
       s._limbRetarget = mode;
@@ -1771,7 +2062,7 @@ class Animator {
       if (!g.retarget) { own.set(g, swing(g)); continue; }
       let acc = 0;
       for (const p of g.chain) acc += own.get(p) || 0;
-      own.set(g, deg180(g.restDeg + swing(g) - g.drawn - acc));
+      own.set(g, deg180(g.restOffset + swing(g) - acc));
     }
     const rot = (g) => `rotate(${(own.get(g) || 0).toFixed(2)} ${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
     for (const g of L.limbs) {
@@ -1783,9 +2074,140 @@ class Animator {
       ops.push(rot(g));
       g.el.setAttribute('transform', `${g.neutral ? g.neutral + ' ' : ''}${ops.join(' ')}`);
     }
-    // The limbs carry the whole motion; the region itself must not also drift, or a
-    // route's translate would be competing with a second one written here.
-    wrap.setAttribute('transform', '');
+    // The limbs carry the JOINT motion; the figure's own translation, lean and squash go on
+    // the wrap, which is the one place they can be composed without being counted twice —
+    // every limb is a descendant, so it rides the body exactly as a real limb does.
+    // _bodyTransform returns '' unless the swatch or the artwork opted in (see the gate
+    // there), and this then clears the attribute exactly as it always did.
+    wrap.setAttribute('transform', this._bodyTransform(s, motion, t, intensity));
+  }
+
+  /*
+   * The body channel for this frame: sway, bob, lean and squash as ONE transform string.
+   *
+   * Returns '' whenever there is nothing to say — no pose, mode 'off', or a swatch predating
+   * `pose.root` — and _applyLimbs then clears the wrap as before.
+   *
+   * Mode comes from data-body on the artwork, falling back to what the clip measured:
+   * 'jump' when the capture's vertical dominates its horizontal, else 'dance'. That is a
+   * measurement rather than a name match, so an object called anything at all gets the mode
+   * its driving clip earns. See the BODY_* constants for what each channel is worth.
+   */
+  _bodyTransform(s, motion, t, intensity) {
+    const wrap = s.wrap;
+    const pose = this._poseFor(motion);
+    if (!pose) return '';
+    const declared = (wrap.dataset && wrap.dataset.body) || '';
+    if (declared === 'off') return '';
+    /*
+     * OPTING IN, so that nothing already verified changes under it.
+     *
+     * Tilt and squash need no new extraction — they survive the hip anchoring and have been
+     * present in every pose swatch ever written. That is exactly why this gate exists: were
+     * the channel simply always on, every figure shipped before today would silently start
+     * leaning and squashing, and the reference boy and girl were measured without it.
+     *
+     * So the body channel runs when the swatch carries `root` — the marker of an extraction
+     * that kept the translation — or when the artwork asks for it by name. An older swatch
+     * with no data-body animates byte for byte as it did before.
+     */
+    if (!Array.isArray(pose.root) && !(declared === 'dance' || declared === 'jump')) return '';
+
+    if (!s._body || s._bodyMotion !== motion.id || s._bodyMode !== declared) {
+      const frames = pose.frames.filter(Boolean);
+      const root = Array.isArray(pose.root) ? pose.root : null;
+      const jn = {}; (pose.joints || []).forEach((n, i) => jn[n] = i);
+      const mid = (f, a, b) => {
+        const p = f[jn[a]], q = f[jn[b]];
+        return (p && q) ? [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, Math.min(p[2], q[2])] : null;
+      };
+
+      // Tilt and squash survive the hip anchoring, so they come from `frames` and are
+      // available on every swatch ever shipped. Tilt is folded to +-90: a shoulder line is a
+      // line, so 179deg and -1deg are the same lean and only a fold keeps the track
+      // continuous instead of flipping 358deg whenever the subject squares up to the camera.
+      const tilt = [], torso = [];
+      for (const f of frames) {
+        const sh = mid(f, 'l_sho', 'r_sho'), hp = mid(f, 'l_hip', 'r_hip');
+        const ls = f[jn['l_sho']], rs = f[jn['r_sho']];
+        if (ls && rs && Math.min(ls[2], rs[2]) >= LIMB_VIS_OK) {
+          const a = Math.atan2(rs[1] - ls[1], rs[0] - ls[0]) * 180 / Math.PI;
+          tilt.push(((a + 90) % 180 + 180) % 180 - 90);
+        } else tilt.push(null);
+        torso.push((sh && hp && Math.min(sh[2], hp[2]) >= LIMB_VIS_OK)
+          ? Math.hypot(sh[0] - hp[0], sh[1] - hp[1]) : null);
+      }
+      const med = (v) => {
+        const g = v.filter(x => x != null).sort((a, b) => a - b);
+        return g.length ? g[Math.floor(g.length / 2)] : 0;
+      };
+      const t0 = med(torso);
+      // Tilt about its own median, not about zero: a subject filmed slightly off-square has a
+      // standing lean, and treating that as motion would hold the drawing permanently askew.
+      const tiltMid = med(tilt);
+      const hold = (v, fb) => {                 // carry the last believed value across gates
+        let last = fb; return v.map(x => (x == null ? last : (last = x)));
+      };
+      const tiltTrack = hold(tilt.map(x => x == null ? null : x - tiltMid), 0);
+      const squashTrack = hold(torso.map(x => (x == null || !t0) ? null : x / t0 - 1), 0);
+      const sway = root ? root.map(r => (r ? r[0] : 0)) : null;
+      const bob = root ? root.map(r => (r ? r[1] : 0)) : null;
+
+      // Which mode the CLIP earns, when the artwork has not declared one. A hop is vertical:
+      // its bob outruns its sway. The dance measures 0.1408 x against 0.0321 y, so it fails
+      // this and is a dance, which is what it is.
+      const rangeOf = (v) => (v && v.length) ? Math.max(...v) - Math.min(...v) : 0;
+      const auto = (rangeOf(bob) > rangeOf(sway)) ? 'jump' : 'dance';
+      const mode = (declared === 'dance' || declared === 'jump') ? declared : auto;
+
+      // The figure's own size sets the scale, and its base is what it pivots and stands on:
+      // a body leans and lands about its feet, not about its middle. Read once — getBBox is
+      // measured before any body transform is written, so it is the untransformed art.
+      let bb = null; try { bb = wrap.getBBox(); } catch (_) { bb = null; }
+      const h = (bb && bb.height) || 0;
+      s._body = {
+        mode, fps: pose.fps || 15, n: (sway || tiltTrack).length,
+        sway, bob, tilt: tiltTrack, squash: squashTrack, h,
+        bx: bb ? bb.x + bb.width / 2 : 0, by: bb ? bb.y + bb.height : 0,
+        // Whether the translation channels are real or absent, so the inspector can say
+        // "sway unavailable (swatch predates pose.root)" instead of showing a silent zero.
+        hasRoot: !!root,
+      };
+      s._bodyMotion = motion.id;
+      s._bodyMode = declared;
+    }
+
+    const B = s._body;
+    if (!B.n || !B.h) return '';
+    const { i0, f: ft } = framePos(t, B.fps, B.n);
+    const at = (track) => {
+      if (!track) return 0;
+      const a = track[i0] || 0, b = track[(i0 + 1) % B.n] || 0;
+      return a + (b - a) * ft;
+    };
+    const clamp = (v, m) => Math.max(-m, Math.min(m, v));
+
+    let dx = 0, dy = 0, rot = 0, sx = 1, sy = 1;
+    if (B.mode === 'jump') {
+      // Vertical only. Screen y grows downward, so a NEGATIVE dy is a rise, and the squash is
+      // opposed to it: tallest at the top of the arc, flattest at the bottom.
+      const up = -at(B.bob) * B.h * BODY_JUMP_GAIN * intensity;
+      dy = up;
+      const k = clamp((up / B.h) * (BODY_JUMP_SQUASH / 0.05), BODY_JUMP_SQUASH);
+      sy = 1 + k; sx = 1 - k;
+    } else {
+      dx = at(B.sway) * B.h * BODY_SWAY_GAIN * intensity;
+      dy = at(B.bob) * B.h * BODY_BOB_GAIN * intensity;
+      rot = clamp(at(B.tilt) * BODY_TILT_GAIN * intensity, BODY_TILT_MAX);
+      const k = clamp(at(B.squash) * BODY_SQUASH_GAIN * intensity, BODY_SQUASH_MAX);
+      sy = 1 + k; sx = 1 - k;                  // volume-ish: widen as it shortens
+    }
+
+    // Right to left: move to the base, lean and squash there, come back, then translate.
+    const p = (v) => v.toFixed(2);
+    return `translate(${p(dx)} ${p(dy)}) translate(${p(B.bx)} ${p(B.by)}) `
+         + `rotate(${p(rot)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) `
+         + `translate(${p(-B.bx)} ${p(-B.by)})`;
   }
 
   _applyWings(s, motion, t, intensity) {

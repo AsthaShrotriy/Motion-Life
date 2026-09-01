@@ -47,7 +47,10 @@ function hexToRgb(hex) {
 function buildChipState(m) {
   // character motion: the swatch IS the extracted stick figure (animated)
   if (m.pose && m.pose.joints && m.pose.frames && m.pose.frames.length) {
-    return { pose: { joints: m.pose.joints, fps: m.pose.fps || 15, frames: m.pose.frames.filter(Boolean) } };
+    // gait rides along so the chip's stick figure reads the same stride axis the scene does
+    // (see LIMB_DEPTH_ROLES) — otherwise the chip and the artwork disagree about the legs.
+    return { pose: { joints: m.pose.joints, fps: m.pose.fps || 15,
+                     frames: m.pose.frames.filter(Boolean), gait: m.pose.gait || null } };
   }
   if (m.trajectories && m.trajectories.length >= 25) {
     // subsample the 12x12 grid to 5x5, store drift-removed relative tracks
@@ -350,6 +353,19 @@ const FILE_SCENES = {
   // through every pose gate to the generic texture path and the whole figure wobbles ~4px in
   // place instead of walking.
   girl: 'assets/scenes/girl-scene3.svg',
+  // The station platform, with the suitcase and the hat limb-rigged — two independent
+  // figures in one artwork, so each takes its own motion swatch. Same reason as `girl`:
+  // without data-limb a pose swatch cannot articulate them and the whole figure wobbles
+  // in place. Pivots were measured off the path geometry, not eyeballed (see the file).
+  station: 'assets/scenes/scene2-station.svg',
+  // The SAME station artwork exactly as the artist saved it: named layers ("Left Hand",
+  // "Right Leg", …) and NOT ONE data-limb or data-pivot in the file. It is here as the
+  // fixture for js/autorig.js — load it and the rig has to appear from the names alone.
+  // Keeping both copies is the point: `station` proves hand-authored tags still win,
+  // `stationLabels` proves nothing has to be hand-authored. Driven by
+  // assets/videos/dance-arms-overhead.mp4 the two agree to within 0.1deg on all four
+  // limbs (113.4 / 91.9 / 18.0 / 19.4), at the same 3.90s = n/fps period.
+  stationLabels: 'assets/scenes/scene2-labels-only.svg',
 };
 
 async function loadScene(name) {
@@ -420,12 +436,26 @@ function loadUploadedSVG(text) {
     const w = svg.getAttribute('width') || 800, h = svg.getAttribute('height') || 500;
     svg.setAttribute('viewBox', `0 0 ${parseFloat(w)} ${parseFloat(h)}`);
   }
+  /* Read the artist's OWN layer names into a limb rig, before regions.js attaches — its rig
+     detection gates on [data-limb], so a rig tagged after attach is invisible to it and the
+     figure gets drilled into limb-by-limb with no torso to hinge against.
+     This is why naming a layer "Left Hand" is now enough: previously those names were read by
+     nothing, the scene loaded unrigged, and a pose swatch could only be handed to a
+     whole-figure applicator that moves the entire drawing as one block. */
+  let rig = null;
+  try { rig = window.autoRigFromLayerNames && window.autoRigFromLayerNames(svg); } catch (_) {}
+
   syncOverlay();
   sel.attachSVG(svg);
   setModeUI('svg');
   renderChips(); hideInspector(); showLayers();
   const n = svg.querySelectorAll('.ms-wrap').length;
-  status(`SVG loaded — ${n} selectable element(s). Click one to select, then pick a motion.`, true);
+  const rigNote = rig && rig.tagged.length
+    ? ` Rigged ${rig.tagged.length} limb(s) on ${rig.figures} figure(s) from your layer names `
+      + `(${[...new Set(rig.tagged.map(t => t.role))].sort().join(', ')}).`
+    : '';
+  status(`SVG loaded — ${n} selectable element(s). Click one to select, then pick a motion.`
+         + rigNote, true);
 }
 
 function loadRasterImage(dataUrl) {
@@ -487,12 +517,17 @@ function showInspector(s) {
   showJudge(s);
 }
 
-/* Limb-retarget mode control — shown only for artwork with data-limb rig parts. */
+/* Limb-retarget mode control — shown only for artwork with data-limb rig parts, and only
+   when builder copy is on (?diag=1). It is a tuning control with a technical explanation
+   attached, so it stays out of a viewer's way; hiding the row does NOT change behaviour,
+   because the mode falls back to s.limbRetarget / data-retarget / LIMB_RETARGET_DEFAULT
+   exactly as before whether or not the select is on screen. */
 function showRetarget(s) {
   const row = $('insp-retarget-row');
   const limbs = s.wrap.querySelectorAll('[data-limb]').length;
-  row.hidden = !limbs;
-  if (!limbs) return;
+  const diag = !!(window.__msShowDiag && window.__msShowDiag());
+  row.hidden = !limbs || !diag;
+  if (!limbs || !diag) return;
   $('insp-retarget').value = s.limbRetarget || s.wrap.dataset.retarget || LIMB_RETARGET_DEFAULT;
   let cost = '';
   const offs = s._limb && s._limb.offsets;
@@ -525,6 +560,35 @@ function showRoute(s) {
   }
   $('btn-draw-route').textContent = drawing ? 'Finish route' : (s.route ? 'Redraw route' : 'Draw route');
   $('btn-clear-route').disabled = !s.route;
+
+  const loopBtn = $('btn-loop-route'), hint = $('insp-route-hint');
+  const looping = !!(s.route && s.route.loop);
+  loopBtn.disabled = !s.route;
+  loopBtn.textContent = looping ? 'Looping' : 'Loop travel';
+  loopBtn.classList.toggle('on', looping);
+  /* Say whether the loop is seamless instead of leaving the user to wonder why it jumps.
+     An open route has to cut back to its first point at the end of every lap — that is not
+     a bug to hide, it is what looping a path that finishes elsewhere means. */
+  if (looping) {
+    const gap = routeSeamGap(s.route);
+    hint.textContent = gap <= 2
+      ? 'Seamless loop — the route ends where it starts.'
+      : `Each lap cuts back ${Math.round(gap)} units to the first point. `
+        + 'Draw the route back to where it started for a seamless loop.';
+    hint.hidden = false;
+  } else {
+    hint.hidden = true;
+    hint.textContent = '';
+  }
+}
+
+/* How far a route's last point is from its first, in viewBox units — i.e. how big the jump
+   is when it wraps. Zero on a closed route. */
+function routeSeamGap(route) {
+  const p = route.pts;
+  if (!p || p.length < 2) return 0;
+  const a = p[0], b = p[p.length - 1];
+  return Math.hypot(b[0] - a[0], b[1] - a[1]);
 }
 function hideInspector() { $('inspector-section').hidden = true; $('inspector-content').hidden = true; markLayerActive(null); showJudge(null); }
 
@@ -696,6 +760,25 @@ $('btn-draw-route').addEventListener('click', () => {
     status(`Click across the canvas to lay out where "${s.name}" travels. ` +
            'Double-click to finish, Esc to cancel.');
   }
+  showRoute(s);
+});
+/* Loop the authored travel, and start it over from the first point right now.
+   Re-arming matters: without it a route already parked at its destination would sit there
+   for a whole duration before the first lap came round, so the click would look ignored.
+   Bumping `rev` is the existing re-arm mechanism (_applyRoute resets _routeT0 when the rev
+   it recorded no longer matches), and rev is only ever compared for inequality, so counting
+   up is safe and — unlike Date.now() — cannot collide with two clicks in the same ms. */
+$('btn-loop-route').addEventListener('click', () => {
+  const s = sel.getActive();
+  if (!s || !s.route) return;
+  s.route.loop = !s.route.loop;
+  s.route.rev = (s.route.rev || 0) + 1;
+  s._routeTbl = null;
+  if (!animator.playing) animator.play();
+  syncPlayButton();
+  status(s.route.loop
+    ? `"${s.name}" is travelling its route on a loop (${s.route.duration.toFixed(1)}s a lap).`
+    : `"${s.name}" travels its route once, then holds at the end.`);
   showRoute(s);
 });
 $('btn-clear-route').addEventListener('click', () => {
