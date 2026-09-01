@@ -294,7 +294,16 @@ class SelectionManager {
    * for this pairing, and the artwork is the only place that knows so.
    */
   _carryRigAttrs(el, wrap) {
-    const v = el.getAttribute('data-retarget');
+    // AT OR ABOVE `el`, not just on it. The declaration belongs to the FIGURE, and the element
+    // that ends up wrapped is not always the element that declared it: the auto-rig
+    // (js/autorig.js) attaches it to the figure group it derived, and a wrap may be made for a
+    // descendant of that. Measured on the user's own scene2.svg — the figure group there is an
+    // unnamed <g> inside "Suitcase", so an own-attribute-only lookup found nothing, the mode
+    // fell back to the 'legs' default, and both legs were retargeted off centre by about
+    // -35deg and +27deg while the arms (which that mode leaves alone) were correct. Called
+    // before `el` is moved into the wrap, so `el` is still in the original tree here.
+    const src = el.closest ? el.closest('[data-retarget]') : null;
+    const v = (src && src.getAttribute('data-retarget')) || el.getAttribute('data-retarget');
     if (v) wrap.setAttribute('data-retarget', v);
   }
 

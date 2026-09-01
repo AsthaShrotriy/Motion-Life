@@ -58,19 +58,45 @@ window.handleMotionUpload = async (e) => {
   // The router LOOKS AT THE CLIP and picks the extractor — you don't declare the type.
   //   articulated (a body) -> MediaPipe skeleton   ·   everything else -> RAFT texture
   // If the router is down/unauthed it falls back to the manual selection heuristic.
-  let routed = null, allMotions = [];
-  try {
-    $('upload-status').textContent = 'Reading the clip with the VLM router…';
-    const contract = await capture.decomposeMotion(file);
-    if (contract && !contract.static && contract.motions && contract.motions.length) {
-      allMotions = contract.motions.slice().sort((a, b) => b.confidence - a.confidence);
-      routed = allMotions[0];
+  let routed = null, allMotions = [], routerErr = null;
+  // Two attempts, because the failure this guards against is TRANSIENT: the router is a
+  // plain HTTPServer in front of Bedrock, and Bedrock answers 503 "unable to process your
+  // request" under load. One 503 used to be indistinguishable from "no router", which sent
+  // a dance clip down the texture path. A second try costs one round-trip and recovers it.
+  for (let attempt = 0; attempt < 2 && !routed; attempt++) {
+    try {
+      $('upload-status').textContent = attempt
+        ? 'Router busy (503) — retrying…' : 'Reading the clip with the VLM router…';
+      const contract = await capture.decomposeMotion(file);
+      if (contract && !contract.static && contract.motions && contract.motions.length) {
+        allMotions = contract.motions.slice().sort((a, b) => b.confidence - a.confidence);
+        routed = allMotions[0];
+        routerErr = null;
+      } else if (contract && contract.static) {
+        break;                                  // a real reading: the clip is static
+      } else {
+        routerErr = capture.lastError || 'router returned no motions';
+      }
+    } catch (err) {
+      // NOT swallowed. This catch used to be `catch (_) {}`, so an unreachable or 503-ing
+      // router was silently identical to a router that had looked at the clip and said
+      // "texture" — and the whole upload then took the texture path with no trace on screen
+      // of the one thing that had actually failed.
+      routerErr = (err && err.message) || String(err);
     }
-  } catch (_) {}
+  }
+  if (routerErr) console.warn('[upload] VLM router unavailable:', routerErr);
 
   const act0 = sel.getActive();
   const manualRig = act0 && act0.kind === 'svg' && wrapIsRig(act0.wrap);
-  const sceneRig = document.querySelector('#artwork-container [data-motion-mode="character"]');
+  // EVERY rig tag, not just data-motion-mode="character". This lookup is the only thing
+  // standing between a rigged scene and a silent drop to RAFT when the router is down, and
+  // for a data-limb scene (the girl, the station) it could never match, so the confirm below
+  // never fired and the figure got a texture swatch: a whole-figure 1s bob where limbs
+  // should have articulated on the clip's own period. Measured on scene2-station with the
+  // router forced to 503 — no dialog, "2 motions detected", library empty of any skeleton.
+  const sceneRig = document.querySelector('#artwork-container ' +
+                     RIG_TAGS.split(',').map(s => s.trim()).join(', #artwork-container '));
   let wantCharacter;
   if (routed) {
     wantCharacter = (routed.class === 'articulated');
@@ -82,9 +108,22 @@ window.handleMotionUpload = async (e) => {
     // footgun confirm so a character scene never silently falls through to RAFT.
     wantCharacter = manualRig;
     if (!wantCharacter && sceneRig) {
+      const why = `Router unavailable (${routerErr || 'no reading'}).`;
+      // Name the FIGURE, not the tagged part. sceneRig is whichever rig tag matched first, and
+      // for a limb rig that is a leaf like "Left Leg" — offering to drive a leg reads as a bug.
+      const figName = (el) => {
+        let cur = el;
+        while (cur && cur.nodeType === 1 && cur.id !== 'artwork-container') {
+          if (!cur.getAttribute('data-limb') && (cur.getAttribute('data-name') || cur.id))
+            return cur.getAttribute('data-name') || cur.id;
+          cur = cur.parentNode;
+        }
+        return 'the rigged figure';
+      };
+      const rigName = figName(sceneRig);
       const goChar = confirm(
-        act0 ? `Router offline. "${act0.name}" is not the character.\n\nOK = BODY motion (MediaPipe) for the character.\nCancel = TEXTURE motion (RAFT) for "${act0.name}".`
-             : 'Router offline. Extract BODY motion (MediaPipe) for the character?\n\nOK = character   ·   Cancel = abort');
+        act0 ? `${why} "${act0.name}" is not a rigged figure.\n\nOK = BODY motion (MediaPipe) for ${rigName}.\nCancel = TEXTURE motion (RAFT) for "${act0.name}".`
+             : `${why} This artwork has a rig (${rigName}).\n\nExtract BODY motion (MediaPipe) for it?\n\nOK = rigged figure   ·   Cancel = abort`);
       if (goChar) wantCharacter = true;
       else if (!act0) { if (reveal) reveal.close(); $('upload-status').textContent = 'Cancelled. Select an object first, then upload.'; e.target.value = ''; return; }
     }

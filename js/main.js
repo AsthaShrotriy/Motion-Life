@@ -428,12 +428,26 @@ function loadUploadedSVG(text) {
     const w = svg.getAttribute('width') || 800, h = svg.getAttribute('height') || 500;
     svg.setAttribute('viewBox', `0 0 ${parseFloat(w)} ${parseFloat(h)}`);
   }
+  /* Read the artist's OWN layer names into a limb rig, before regions.js attaches — its rig
+     detection gates on [data-limb], so a rig tagged after attach is invisible to it and the
+     figure gets drilled into limb-by-limb with no torso to hinge against.
+     This is why naming a layer "Left Hand" is now enough: previously those names were read by
+     nothing, the scene loaded unrigged, and a pose swatch could only be handed to a
+     whole-figure applicator that moves the entire drawing as one block. */
+  let rig = null;
+  try { rig = window.autoRigFromLayerNames && window.autoRigFromLayerNames(svg); } catch (_) {}
+
   syncOverlay();
   sel.attachSVG(svg);
   setModeUI('svg');
   renderChips(); hideInspector(); showLayers();
   const n = svg.querySelectorAll('.ms-wrap').length;
-  status(`SVG loaded — ${n} selectable element(s). Click one to select, then pick a motion.`, true);
+  const rigNote = rig && rig.tagged.length
+    ? ` Rigged ${rig.tagged.length} limb(s) on ${rig.figures} figure(s) from your layer names `
+      + `(${[...new Set(rig.tagged.map(t => t.role))].sort().join(', ')}).`
+    : '';
+  status(`SVG loaded — ${n} selectable element(s). Click one to select, then pick a motion.`
+         + rigNote, true);
 }
 
 function loadRasterImage(dataUrl) {
