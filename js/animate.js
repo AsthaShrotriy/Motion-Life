@@ -234,15 +234,24 @@ const BODY_SQUASH_MAX = 0.10;
  * number of hops; the height does not. Anything that reports this as extracted height is
  * lying, and the inspector labels it `jump (height x6)` for that reason.
  *
- * 6 is where the arc stops looking like a bounce and starts looking like a hop, on a figure
- * whose own height sets the scale — 0.0321 box units x 6 x figure height is a rise of ~19% of
- * the figure, against a real standing jump of roughly 25-30%.
+ * 3 is where the arc reads as a hop without reading as flight, on a figure whose own height
+ * sets the scale — 0.0321 box units x 3 x figure height is a rise of ~10% of the figure,
+ * against a real standing jump of roughly 25-30%. 6 was tried first and reported back as
+ * "jumping too much": on a small object like the cap, whose whole body is 79px, a rise of 19%
+ * of itself detaches it from the head it sits on, and the eye reads a launch rather than a
+ * bounce. The amount an object may leave its own footprint scales with how firmly the artwork
+ * plants it, not with the dancer's numbers, so this is the knob that gets tuned by looking.
  */
-const BODY_JUMP_GAIN = 6.0;
+const BODY_JUMP_GAIN = 3.0;
 /* Squash coupled to height, opposed in sign: compressed at the bottom of the arc, stretched
  * at the top. This is what actually reads as a jump — anticipation and landing carry it far
- * more than altitude does, which is why the gain above can stay as low as it is. */
-const BODY_JUMP_SQUASH = 0.08;
+ * more than altitude does, which is why the gain above can stay as low as it is.
+ *
+ * Note this clamp binds, it does not merely cap: at any gain worth using, (up/h)x1.6 exceeds
+ * it, so the number below IS the squash amplitude rather than a limit on it. Lowering the gain
+ * therefore does nothing to the deformation, and a cap that hops half as high while still
+ * stretching a sixth of its height reads as rubber. Halved alongside the gain for that reason. */
+const BODY_JUMP_SQUASH = 0.04;
 
 /* Shortest-arc normalisation to -180..180, sign preserved. */
 const deg180 = (d) => ((d + 180) % 360 + 360) % 360 - 180;
