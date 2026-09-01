@@ -279,6 +279,25 @@ class SelectionManager {
     this.redraw();
   }
 
+  /* Carry rig authoring attributes from the wrapped element onto its .ms-wrap.
+   *
+   * _applyLimbs reads `wrap.dataset.retarget` (js/animate.js) as the artwork's say in how its
+   * rig is retargeted — but every wrap here is a FRESH <g>, so before this that lookup could
+   * never be anything but undefined and the whole artwork-level channel was dead. A scene
+   * could declare data-limb and data-pivot and then be silently overruled on the one setting
+   * that decides whether its drawn pose survives.
+   *
+   * It matters for scene2-station: the CAP clip's thigh is near-horizontal for its whole
+   * length (hip y 0.631 vs knee y 0.623, circular R 0.95 — the subject's knee is up, not
+   * standing), so retargeting the hat's drawn standing legs at that rest bone asks for
+   * +122.6deg and +106.4deg. Nothing is wrong with the retargeter; it is the wrong request
+   * for this pairing, and the artwork is the only place that knows so.
+   */
+  _carryRigAttrs(el, wrap) {
+    const v = el.getAttribute('data-retarget');
+    if (v) wrap.setAttribute('data-retarget', v);
+  }
+
   // ---- wrap each selectable unit so we have a stable animate target ----
   _wrapSelectableUnits(svg) {
     let units = [...svg.querySelectorAll('.layer[data-name]')];
@@ -309,6 +328,7 @@ class SelectionManager {
       const wrap = document.createElementNS(SVGNS, 'g');
       wrap.setAttribute('class', 'ms-wrap');
       wrap.setAttribute('data-ms-name', name);
+      this._carryRigAttrs(el, wrap);
       el.parentNode.insertBefore(wrap, el);
       wrap.appendChild(el);
     }
@@ -426,6 +446,7 @@ class SelectionManager {
     const wrap = document.createElementNS(SVGNS, 'g');
     wrap.setAttribute('class', 'ms-wrap');
     wrap.setAttribute('data-ms-name', el.getAttribute('data-name') || el.id || 'group');
+    this._carryRigAttrs(el, wrap);
     el.parentNode.insertBefore(wrap, el);
     wrap.appendChild(el);
     return wrap;

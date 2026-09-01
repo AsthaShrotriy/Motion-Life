@@ -353,6 +353,11 @@ const FILE_SCENES = {
   // through every pose gate to the generic texture path and the whole figure wobbles ~4px in
   // place instead of walking.
   girl: 'assets/scenes/girl-scene3.svg',
+  // The station platform, with the suitcase and the hat limb-rigged — two independent
+  // figures in one artwork, so each takes its own motion swatch. Same reason as `girl`:
+  // without data-limb a pose swatch cannot articulate them and the whole figure wobbles
+  // in place. Pivots were measured off the path geometry, not eyeballed (see the file).
+  station: 'assets/scenes/scene2-station.svg',
 };
 
 async function loadScene(name) {

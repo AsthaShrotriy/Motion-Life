@@ -82,9 +82,15 @@ pgrep -f "http.server 8000" >/dev/null || \
 
 # 2. RAFT flow + engine registry (torch, py3.13 ok)
 ensure_venv service/venv service/requirements.txt python3
+# POSE_SERVICE_URL points the registry's pose_mediapipe probe at the port pose ACTUALLY
+# runs on here (:8870, below), not its 87xx default. Without it /engines reports
+# "pose_mediapipe available: false — start pose_server.py (:8770)" while MediaPipe is up
+# and answering on :8870 — a live service described as missing, which is exactly the kind
+# of thing someone reads before concluding the rig cannot work.
 pgrep -f "server:app" >/dev/null || \
   { [ -x service/venv/bin/uvicorn ] && \
-    (service/venv/bin/uvicorn --app-dir service server:app --host 127.0.0.1 --port 8865 \
+    (POSE_SERVICE_URL=http://127.0.0.1:8870 \
+     service/venv/bin/uvicorn --app-dir service server:app --host 127.0.0.1 --port 8865 \
        >logs/raft.log 2>&1 &) && echo "  :8865 RAFT + registry"; }
 
 # 3. VLM router (needs .env key) — routervenv shared with preprocess

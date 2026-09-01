@@ -311,7 +311,7 @@ register(Engine("keypointrcnn", SKELETON, "torchvision Keypoint R-CNN — domina
                 factory=_keypointrcnn_build, default=True))
 
 
-# ── SKELETON: MediaPipe pose/hands/face — lives on the :8770 service (Backend A) ──
+# ── SKELETON: MediaPipe pose/hands/face — lives on its own service (Backend A) ──
 def _reachable(url, timeout=0.4):
     try:
         import urllib.request
@@ -321,13 +321,19 @@ def _reachable(url, timeout=0.4):
         return False
 
 
-POSE_URL = os.environ.get("POSE_SERVICE_URL", "http://127.0.0.1:8770")
+# The browser fetches pose on :8870 (js/capture.js), and start-all.sh launches it there and
+# passes that URL in. This default is only what a BARE `uvicorn server:app` gets, so every
+# message below quotes POSE_URL rather than hardcoding a port: a probe that says ":8770" while
+# the service answers on :8870 sends the reader to look for a service that was never missing.
+POSE_URL = os.environ.get("POSE_SERVICE_URL", "http://127.0.0.1:8870")
 register(Engine("pose_mediapipe", SKELETON,
-                "MediaPipe BlazePose/Hands/Face — served by pose_server.py (:8770)",
-                probe=lambda: (True, "pose_server :8770 up") if _reachable(POSE_URL + "/")
-                              else (False, "start pose_server.py (:8770) for MediaPipe pose/hands/face"),
+                f"MediaPipe BlazePose/Hands/Face — served by pose_server.py ({POSE_URL})",
+                probe=lambda: (True, f"pose_server {POSE_URL} up") if _reachable(POSE_URL + "/")
+                              else (False, f"start pose_server.py on {POSE_URL} for MediaPipe "
+                                           "pose/hands/face (POSE_PORT / POSE_SERVICE_URL)"),
                 factory=lambda: (_ for _ in ()).throw(RuntimeError(
-                    "pose_mediapipe runs on the :8770 service (POST /extract), not the :8765 registry"))))
+                    f"pose_mediapipe runs on the {POSE_URL} service (POST /extract), "
+                    "not the :8765 registry"))))
 
 
 # ── GATED research backends: registered + routed, but probe False until set up ──
