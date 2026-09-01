@@ -881,6 +881,7 @@ class SelectionManager {
         pts: r.pts,
         authored: true,          // hand-drawn, NOT measured — see the note above
         duration: 4.0,
+        loop: false,             // one trip and hold, until the Loop travel button says otherwise
         rev: Date.now(),         // bumped on every edit so the animator rebuilds its table
       };
       r.sel._routeTbl = null;

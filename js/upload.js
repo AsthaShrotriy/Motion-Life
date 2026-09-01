@@ -11,6 +11,21 @@
 // Cycled by extraction order.
 const MULTI_MOTION_COLORS = ['#7c6cff', '#34d399', '#ff8a4c', '#ff5c8a', '#3bc9ff', '#ffd166'];
 
+/* BUILDER-FACING COPY AND CONTROLS, off by default.
+   Covers the ⚠ "no walk cycle in this clip" and ℹ "stride is along the camera axis" notes
+   the pose service measures per clip, and the Rest pose (retarget) row in the inspector.
+   All of it is for whoever is BUILDING with this tool, not for an audience watching it.
+   Nothing is discarded or disabled: the full measured note is always logged to the console,
+   `gait` still travels on the swatch and still steers the rig, retargeting still runs at its
+   default, and `?diag=1` (or window.__msDiag = true) puts every piece back on screen.
+   Exposed on window because main.js is a separate IIFE and gates its own rows with it. */
+const DIAG = (() => {
+  try { return new URLSearchParams(location.search).get('diag') === '1'; }
+  catch (_) { return false; }
+})();
+const showDiag = () => DIAG || window.__msDiag === true;
+window.__msShowDiag = showDiag;
+
 window.handleMotionUpload = async (e) => {
   // main.js is a separate IIFE-wrapped script; grab the shared helpers it exposes.
   const { $, status, capture, library, sel, renderMotionList, addVideoThumb,
@@ -111,9 +126,14 @@ window.handleMotionUpload = async (e) => {
       const motion = {
         id: 'char-' + Date.now(), name,
         desc: `Character motion · MediaPipe (${pose.detected}/${pose.total} frames)`
-              + (noGait ? `\n⚠ ${noGait.note}` : ''),
+              + (noGait && showDiag() ? `\n⚠ ${noGait.note}` : ''),
         color: '#34d399', character: true,
-        pose: { joints: pose.joints, fps: pose.fps, frames: pose.frames.filter(Boolean) },
+        // `gait` travels WITH the pose, not just into the warning text above: it carries
+        // stride_axis, which tells the rig whether this clip's stride is across the picture
+        // or along the camera axis. Dropping it here silently sent every head-on walk down
+        // the picture-plane path, where its legs swing 4deg instead of 52deg.
+        pose: { joints: pose.joints, fps: pose.fps, frames: pose.frames.filter(Boolean),
+                gait },
         params: { frequency: 1, amplitude: 0.2, direction: 0, turbulence: 0, damping: 0, phaseSpread: 0 },
         videoUrl, fromUpload: true, engine: 'mediapipe',
         swatches: sw && sw.kind === 'skeleton' ? [sw] : [],
@@ -130,12 +150,28 @@ window.handleMotionUpload = async (e) => {
         status(`Character motion "${name}" captured (MediaPipe). Click an object to apply it.`, true);
       }
       if (noGait) {
-        // Said LAST so it is what stays on screen: the capture succeeded, and the thing the
-        // user needs to know is that what it captured is not a walk. Not flashed as success,
-        // and it reports the measurement rather than a verdict about their clip.
-        $('upload-status').textContent += `\n⚠ ${noGait.note}`;
-        status(`⚠ "${name}": no walk cycle in this clip (foot gap ${noGait.foot_gap}, `
-               + `repeat ${noGait.periodicity}) — the rig has jitter to replay, not a stride.`);
+        // Logged unconditionally — the measurement is the whole reason the service computes
+        // it, and losing it would leave a clip that animates like a broken animator with no
+        // explanation anywhere. On screen only under ?diag=1, and said LAST there so it is
+        // what stays up: the capture succeeded, and what it captured is not a walk. Not
+        // flashed as success, and it reports the measurement rather than judging the clip.
+        console.warn(`[motion] "${name}": no walk cycle recoverable — ${noGait.note}`);
+        if (showDiag()) {
+          $('upload-status').textContent += `\n⚠ ${noGait.note}`;
+          status(`⚠ "${name}": no walk cycle in this clip (foot gap ${noGait.foot_gap}, `
+                 + `repeat ${noGait.periodicity}) — the rig has jitter to replay, not a stride.`);
+        }
+      } else if (gait && gait.stride_axis === 'depth') {
+        // Not a warning — this clip DID yield a walk. But it came off the depth channel,
+        // which MediaPipe estimates less precisely than position, so say so rather than let
+        // a coarser stride read as the best the extractor can do.
+        console.info(`[motion] "${name}": stride along the camera axis — ${gait.note}`);
+        if (showDiag()) {
+          $('upload-status').textContent += `\nℹ ${gait.note}`;
+          status(`"${name}": stride is along the camera axis — legs driven from depth `
+                 + `(feet part ${gait.depth_gap} in depth vs ${gait.foot_gap} sideways). `
+                 + `A SIDE-ON clip gives a cleaner stride.`);
+        }
       }
     } catch (err) {
       if (reveal) reveal.finish();

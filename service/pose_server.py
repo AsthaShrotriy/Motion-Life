@@ -36,7 +36,7 @@ depth); pose keeps [x,y,visibility]. Contract-B shapes live in service/contracts
 Run with the MediaPipe venv (Python <=3.12):
   /tmp/ms-test/mpvenv/bin/python service/pose_server.py    # serves on :8770
 """
-import json, tempfile, os, sys, statistics
+import json, math, tempfile, os, sys, statistics
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from collections import Counter
@@ -140,8 +140,131 @@ GAIT_WALKABLE_MIN = 0.6
 # the waist up, against 0.82-0.99 on every clip with the feet in shot.
 GAIT_ANKLE_VIS_MIN = 0.5
 
+# ── admitting a stride that is along the CAMERA AXIS (see _gait_coherence) ────────────────
+# Scoring depth with the image plane's own rule does not work. Measured depth score on the
+# calibration set: head-on walk 0.537 but DANCE 0.565 — the non-walk scores HIGHER, so no
+# threshold on that number can admit the walk and reject the dance. What separates them is the
+# thing walking actually IS: the two legs alternate. Measured on the depth thigh tracks:
+#
+#   clip                      L/R corr   band power L/R   period L/R   gap    verdict
+#   brisk walk   HEAD-ON walk   -0.76      73% / 81%      1.29 / 1.29  0.340  ADMIT
+#   dance        NOT a walk     +0.15      15% / 20%      1.33 / 0.97  0.666  reject
+#   firefly-flap NOT a walk     +0.70      61% / 65%      0.67 / 2.00  0.047  reject
+#   walk-grid    waist-up       +0.93      14% /  7%      1.90 / 1.90  0.060  reject
+#
+# The head-on walk is the only clip that clears all of them, and the two that discriminate do
+# so with room to spare: antiphase -0.76 against a next-best of +0.15, band 73% against 65%.
+#
+# The DEPTH AMPLITUDE is deliberately not one of the discriminators — note that dance has
+# twice the depth gap of the real walk. It is only a floor, and it reuses GAIT_GAP_MIN rather
+# than introducing a tuned constant, which is defensible now that depth is scaled into the
+# same units as the image plane (see _depth_scale). Worth knowing: the head-on walk clears
+# that floor by 13% (0.340 against 0.30), so a head-on walk with a shorter stride than this
+# one would fail it. It fails CLOSED — back to the picture plane plus the existing "no walk
+# cycle" warning — which is the safe direction, but it is a real limit and not a wide margin.
+# The two clips whose stride the picture plane already carries (walk-man-side, walk-man) never
+# reach this test at all; it is only asked when the picture plane came up empty.
+GAIT_DEPTH_ANTIPHASE_MAX = -0.5   # legs must ALTERNATE, not swing together
+GAIT_DEPTH_BAND_MIN = 0.5         # ...cyclically, in the 0.5-1.5Hz band a gait lives in
+GAIT_DEPTH_AGREE_MIN = 0.8        # ...at ONE cadence both legs share
+# The gait band itself, in Hz. A human walk cycles a leg roughly once a second; 0.5-1.5Hz
+# spans a slow amble to a brisk walk and excludes both drift (below) and detector noise
+# (above). Measured peak periods for the three real walks all land inside it: 1.29s, 1.70s,
+# 1.29s.
+GAIT_BAND_HZ = (0.5, 1.5)
 
-def _gait_coherence(frames):
+
+# Depth scale to fall back on when MediaPipe returns no world landmarks for a clip. Measured
+# zk over four clips: 0.541, 0.471, 0.502, 0.476 — a property of the encoding, not of the
+# framing, so a median of them is a measurement rather than a guess. Still per-clip wherever
+# the world landmarks exist, since this is the one number the depth swing scales with.
+DEPTH_SCALE_FALLBACK = 0.50
+
+
+def _depth_scale(img_seq, wld_seq):
+    """How much to multiply image-space z by to put it in the same units as image y.
+
+    MediaPipe documents z as "roughly the same scale as x". Roughly is not enough to build an
+    angle on: x is a fraction of frame WIDTH and y a fraction of frame HEIGHT, so the obvious
+    correction is to scale z by the aspect ratio the way x is scaled. Measured, that is wrong
+    by a factor of ~3.5.
+
+    So it is calibrated instead, against the one output that has real units:
+    pose_world_landmarks, which are metres. For each bone, metres-per-image-unit is measured
+    along y and along z; their ratio is what z must be multiplied by. The median over eight
+    bones is taken so a single noisy joint cannot set the scale.
+
+    Validated on three walks — calibrated image z against the metric thigh swing:
+
+        brisk walk (head-on)   29.5deg vs 30.0deg   (aspect instead: 82.6deg)
+        walk-man-side          30.1deg vs 28.7deg   (aspect instead: 96.3deg)
+        walk-man (behind)      33.4deg vs 29.2deg   (aspect instead: 75.3deg)
+
+    and the factor itself came out 0.541 / 0.471 / 0.502 / 0.476 on those clips plus dance —
+    stable, which is what makes a fallback constant defensible when world landmarks are
+    missing.
+    """
+    pairs = [("l_hip", "l_knee"), ("r_hip", "r_knee"), ("l_knee", "l_ank"),
+             ("r_knee", "r_ank"), ("l_sho", "l_elb"), ("r_sho", "r_elb"),
+             ("l_sho", "l_hip"), ("r_sho", "r_hip")]
+    both = [(i, w) for i, w in zip(img_seq, wld_seq) if i and w]
+    if not both:
+        return DEPTH_SCALE_FALLBACK
+    ratios = []
+    for a, b in pairs:
+        iy = statistics.median([abs(i[b][1] - i[a][1]) for i, _ in both])
+        iz = statistics.median([abs(i[b][3] - i[a][3]) for i, _ in both])
+        if iy < 1e-4 or iz < 1e-4:
+            continue                      # bone is edge-on in one axis: no scale to read
+        wy = statistics.median([abs(w[b][1] - w[a][1]) for _, w in both])
+        wz = statistics.median([abs(w[b][2] - w[a][2]) for _, w in both])
+        per_y = wy / iy
+        if per_y > 1e-6:
+            ratios.append((wz / iz) / per_y)
+    return statistics.median(ratios) if ratios else DEPTH_SCALE_FALLBACK
+
+
+def _thigh_track_deg(frames, jn, hip, knee, ax):
+    """Unwrapped, de-trended thigh angle in the (ax, y) plane, in degrees.
+
+    Unwrapping matters: a bone whose angle straddles +/-180 makes raw atan2 output jump a
+    full turn, and a peak-to-peak taken over that measures the branch cut rather than the
+    limb — it reported 140deg of "swing" on an arm that moved 6.5deg. De-trending removes a
+    one-way drift so a track is not credited with range it never repeats; the mean is kept
+    because nothing downstream should shift.
+    """
+    out = []
+    for f in frames:
+        p, q = f[jn[hip]], f[jn[knee]]
+        a = math.degrees(math.atan2(q[ax] - p[ax], q[1] - p[1]))
+        out.append(a if not out else out[-1] + ((a - out[-1] + 180) % 360) - 180)
+    t = np.asarray(out, dtype=float)
+    return t - np.linspace(t[0], t[-1], len(t)) + t.mean()
+
+
+def _band_power(track, fps):
+    """(fraction of power in the gait band, period of the strongest band bin in seconds).
+
+    A periodogram rather than an autocorrelation peak. Autocorrelation cannot answer this:
+    smoothing or any smooth signal drives r at short lag toward 1, so the largest-r lag is
+    always ~2 frames no matter what the signal is — a test I wrote and had to throw away.
+    """
+    n = len(track)
+    if n < 8:
+        return 0.0, 0.0
+    P = np.abs(np.fft.rfft((track - track.mean()) * np.hanning(n))) ** 2
+    k = np.arange(len(P))
+    per = np.where(k > 0, n / np.maximum(k, 1), np.inf)      # bin period, in frames
+    lo, hi = GAIT_BAND_HZ
+    sel = (per >= fps / hi) & (per <= fps / lo) & (k > 0)
+    total = P[k > 0].sum()
+    if not sel.any() or total <= 0:
+        return 0.0, 0.0
+    peak = int(k[sel][np.argmax(P[sel])])
+    return float(P[sel].sum() / total), (float(n / peak / fps) if peak else 0.0)
+
+
+def _gait_coherence(frames, fps=15.0):
     """Do these frames contain a WALK CYCLE a limb rig can follow? Measured, not assumed.
 
     Measured on ONE signal: the horizontal gap between the ankles, l_ank.x - r_ank.x.
@@ -169,9 +292,32 @@ def _gait_coherence(frames):
     The head-on walker is the case that prompted this. His feet never part in the image —
     0.03 against 0.43 for the same walk seen from the side — because the stride happens
     along the camera axis. MediaPipe sees his joints perfectly well (mean visibility 0.99);
-    there is simply no 2D swing to extract, and its own z does not rescue one either. The
-    rig cannot notice this: a track of jitter is still a track. So it is reported here
-    rather than left to look like a broken animator.
+    there is simply no swing in the PICTURE PLANE to extract. The rig cannot notice this: a
+    track of jitter is still a track. So it is reported here rather than left to look like a
+    broken animator.
+
+    An earlier version of this docstring also claimed "its own z does not rescue one
+    either". That was asserted, not measured, and it is false — z was never even in this
+    pipeline to test, since extract() puts `visibility` in the third slot and threw depth
+    away. Measured on brisk-walk.mp4 (head-on, 62 frames at 11.993fps), the SAME gap taken
+    along z instead of x:
+
+        gap swing   x 0.014   z 0.559      (39x)
+        thigh swing x  3.5deg z 52.1deg    (15x)
+
+    and the depth version is a gait signal rather than noise: a periodogram of the depth
+    thigh track puts 73-82% of its power in the 0.5-1.5Hz stride band and only 3-4% above
+    3Hz, peaking at a 1.29s period that every leg bone agrees on. So the depth gap is
+    measured here too, and `stride_axis` says which axis actually carries the stride.
+
+    Depth is a FALLBACK, not an upgrade. On the side-on clip the picture plane is plainly
+    better — 84-85% stride-band power against 46-74% for depth — so it wins whenever it has
+    a cycle at all, and the depth path only opens when it does not. Depth is also reported
+    for the LEGS only: measured on the same head-on clip, the right upper arm in the depth
+    plane gives 140deg of range at 10% high-frequency power (against 6.5deg and 14% in the
+    picture plane), because a raised arm is near-degenerate in depth. Arm swing projects
+    laterally from any viewpoint — which is why the arms measure the same ~15deg head-on and
+    side-on — so there was never anything for depth to recover there.
 
     A small gap has two possible causes, so ankle visibility is measured too: a clip framed
     from the waist up gives the same 0.03 gap as the head-on walk, but the fix is to get the
@@ -205,7 +351,47 @@ def _gait_coherence(frames):
     score = round(min(1.0, swing / GAIT_GAP_MIN) * max(0.0, corr), 3)
     out = {"score": score, "period": lag if score else 0,
            "foot_gap": round(swing, 3), "periodicity": corr, "ankle_visibility": ank_vis,
-           "walkable": score >= GAIT_WALKABLE_MIN}
+           "walkable": score >= GAIT_WALKABLE_MIN, "stride_axis": "image"}
+
+    # ── is the stride along the CAMERA AXIS instead? ──────────────────────────────────────
+    # Only asked when the picture plane came up empty. The picture plane is the better signal
+    # wherever it exists (84-85% stride-band power against 46-74% for depth on the side-on
+    # clip), so it is never overridden — this is a fallback, not a preference.
+    if len(good[0][0]) >= 4 and not out["walkable"]:
+        dgap = np.array([f[jn["l_ank"]][3] - f[jn["r_ank"]][3] for f in good], dtype=float)
+        dswing = float(np.ptp(dgap))
+        tl = _thigh_track_deg(good, jn, "l_hip", "l_knee", 3)
+        tr = _thigh_track_deg(good, jn, "r_hip", "r_knee", 3)
+        anti = (float(np.corrcoef(tl, tr)[0, 1])
+                if tl.std() > 1e-9 and tr.std() > 1e-9 else 0.0)
+        bl, pl = _band_power(tl, fps)
+        br, pr = _band_power(tr, fps)
+        agree = 1 - abs(pl - pr) / max(pl, pr, 1e-9)
+        out.update({"depth_gap": round(dswing, 3), "depth_antiphase": round(anti, 2),
+                    "depth_band": [round(bl, 2), round(br, 2)],
+                    "depth_period": [round(pl, 2), round(pr, 2)],
+                    "depth_agreement": round(agree, 2)})
+        # All four are necessary. The feet have to actually part in depth; the legs have to
+        # ALTERNATE (the one thing that makes a walk a walk, and what rejects the dance that
+        # otherwise outscored this walk); the motion has to be cyclic in the gait band; and
+        # both legs have to report the same cadence. The ankles also still have to have been
+        # SEEN — depth is inferred from the same landmarks, so feet out of shot are no more
+        # recoverable in z than in x.
+        if (dswing >= GAIT_GAP_MIN and anti <= GAIT_DEPTH_ANTIPHASE_MAX
+                and min(bl, br) >= GAIT_DEPTH_BAND_MIN and agree >= GAIT_DEPTH_AGREE_MIN
+                and ank_vis >= GAIT_ANKLE_VIS_MIN):
+            out["stride_axis"] = "depth"
+            out["score"] = round(min(1.0, dswing / GAIT_GAP_MIN) * abs(anti), 3)
+            out["period"] = int(round((pl + pr) / 2 * fps)) if pl and pr else 0
+            out["walkable"] = True
+            out["note"] = ("the stride is along the CAMERA AXIS, not across the picture: the "
+                           "feet part %.2f sideways but %.2f in depth, the legs alternate "
+                           "(correlation %.2f) and both agree on a %.2fs cycle. Driving the "
+                           "LEGS from the depth channel — real extracted motion, though "
+                           "MediaPipe estimates depth less precisely than position, so this "
+                           "stride is coarser than the same walk filmed from the SIDE."
+                           % (swing, dswing, anti, (pl + pr) / 2))
+            return out
     if not out["walkable"]:
         # Say which measurement failed, and say the number. The failures have different causes
         # and different advice, and guessing at "film it from the side" for a clip that simply
@@ -337,7 +523,11 @@ def _clip_scale_and_anchors(raws):
 
 
 def _normalize_clip(raws, aspect=1.0):
-    """raws -> [[x,y,vis]x13] per frame in 0..1, via ONE affine transform per clip.
+    """raws -> [[x,y,vis(,z)]x13] per frame in 0..1, via ONE affine transform per clip.
+
+    A 4th slot carries relative DEPTH when the caller supplied it (see extract_pose_b).
+    It is appended rather than inserted so every consumer that reads [0],[1],[2] is
+    untouched — the shipped swatches on disk stay valid and 3-wide.
 
     The scale is uniform on both axes (the old code used separate bw/bh, which
     squashed body proportions to fill the box) and the extent is measured once
@@ -354,16 +544,29 @@ def _normalize_clip(raws, aspect=1.0):
     proportions. The uncorrected raws are still what _viewpoint() votes on: its
     R = shoulder_w/torso_h thresholds were calibrated in image-normalized space.
     """
+    depth = any(pts and len(next(iter(pts.values()))) >= 4 for pts in raws)
     if aspect != 1.0:
+        # x takes the aspect correction; z does NOT. z arrives already scaled into y's units
+        # by the caller (see _depth_scale) — a measured factor, because "z is roughly the
+        # same scale as x" is documented as approximate and is not accurate enough to build
+        # an angle on. Applying `aspect` to z as well made the head-on thigh swing 82.6deg
+        # against a metric ground truth of 30.0deg.
         raws = [None if not pts else
-                {n: (p[0] * aspect, p[1], p[2]) for n, p in pts.items()}
+                {n: (p[0] * aspect, p[1], p[2]) + ((p[3],) if depth else ())
+                 for n, p in pts.items()}
                 for pts in raws]
     scale, anchors = _clip_scale_and_anchors(raws)
     cen = []
     for pts, a in zip(raws, anchors):
         if not pts or a is None:
             cen.append(None); continue
+        # z is NOT anchored. The anchor removes the subject's travel across the frame, and
+        # MediaPipe's z is already hip-relative, so there is nothing to remove; a per-frame
+        # offset would not change a bone angle anyway, which only reads differences within
+        # one frame. It is scaled, though — a depth angle has to be in the same units as
+        # the vertical it is taken against.
         cen.append([((pts[n][0] - a[0]) / scale, (pts[n][1] - a[1]) / scale, pts[n][2])
+                   + ((pts[n][3] / scale,) if depth else ())
                     for n in NAMES])
     xs = [p[0] for f in cen if f for p in f]
     ys = [p[1] for f in cen if f for p in f]
@@ -375,7 +578,8 @@ def _normalize_clip(raws, aspect=1.0):
     pady = (ext - (y1 - y0)) / 2
     return [None if f is None else
             [[round((p[0] - x0 + padx) / ext, 4), round((p[1] - y0 + pady) / ext, 4),
-              round(float(p[2]), 3)] for p in f]
+              round(float(p[2]), 3)] + ([round(p[3] / ext, 4)] if depth else [])
+             for p in f]
             for f in cen]
 
 
@@ -391,24 +595,43 @@ def extract_pose_b(path):
     # Pixel aspect of the source, needed to undo MediaPipe's per-axis normalization.
     h0, w0 = (sampled[0].shape[:2] if sampled else (1, 1))
     aspect = (w0 / h0) if h0 else 1.0
-    raws = []
+    raws, wlds = [], []
     with MP.Pose(model_complexity=1, min_detection_confidence=0.5,
                  min_tracking_confidence=0.5) as pose:
         for fr in sampled:
             res = pose.process(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB))
             if not res.pose_landmarks:
-                raws.append(None); continue
+                raws.append(None); wlds.append(None); continue
             lm = res.pose_landmarks.landmark
-            raws.append({n: (lm[i].x, lm[i].y, lm[i].visibility) for n, i in IDX.items()})
+            # z is kept as a FOURTH value, not in place of anything. A head-on walk puts its
+            # whole stride on this axis (measured: 39x the sideways foot gap) and the third
+            # slot is already visibility, which nothing else can supply — see _gait_coherence.
+            raws.append({n: (lm[i].x, lm[i].y, lm[i].visibility, lm[i].z)
+                         for n, i in IDX.items()})
+            # World landmarks are metres. Kept only to calibrate the depth scale, not stored:
+            # they are hip-centred and lose the framing every other consumer needs.
+            wl = res.pose_world_landmarks
+            wlds.append({n: (wl.landmark[i].x, wl.landmark[i].y, wl.landmark[i].z)
+                         for n, i in IDX.items()} if wl else None)
+    # Put z into y's units BEFORE normalizing, so everything downstream sees one coherent
+    # space and no consumer has to know about the correction. See _depth_scale.
+    zk = _depth_scale(raws, wlds)
+    raws = [None if not pts else
+            {n: (p[0], p[1], p[2], p[3] * zk) for n, p in pts.items()} for pts in raws]
     # Normalize over the WHOLE clip, not frame by frame — see _normalize_clip.
     frames = _normalize_clip(raws, aspect)
     detected = sum(1 for f in frames if f)
     vis = [tri[2] for f in frames if f for tri in f]
     conf = sum(vis) / len(vis) if vis else 0.0
+    # Stride is however wide _normalize_clip made the tuples, so gap-filling interpolates z
+    # along with everything else rather than dropping it or shearing the flat vector.
+    w = len(frames[next(i for i, f in enumerate(frames) if f)][0]) if detected else 3
     flat = [None if f is None else [v for tri in f for v in tri] for f in frames]
     filled, flags = fill_gaps(flat)
-    frames_b = [None if f is None else [[round(f[k], 4), round(f[k + 1], 4), round(f[k + 2], 3)]
-                                        for k in range(0, len(f), 3)] for f in filled]
+    frames_b = [None if f is None else
+                [[round(f[k], 4), round(f[k + 1], 4), round(f[k + 2], 3)]
+                 + ([round(f[k + 3], 4)] if w >= 4 else [])
+                 for k in range(0, len(f), w)] for f in filled]
     sw = contracts.empty_skeleton_swatch("pose", "mediapipe_blazepose")
     sw["frames"] = frames_b; sw["total"] = len(frames); sw["detected"] = detected
     sw["flags"] = flags; sw["interpolated"] = sum(1 for fl in flags if fl == "interp")
@@ -417,7 +640,9 @@ def extract_pose_b(path):
     # is 15, which is right only for a ~30fps source.
     sw["fps"] = eff_fps
     # Gait scored on the gap-filled frames, i.e. the ones a rig would actually play.
-    sw["gait"] = _gait_coherence(frames_b)
+    # fps matters here: the gait band is in Hz, so scoring a 12fps clip as if it were 15
+    # would look for the cycle in the wrong bins.
+    sw["gait"] = _gait_coherence(frames_b, eff_fps)
     return contracts.normalize_skeleton_swatch(sw)[0]
 
 

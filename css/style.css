@@ -84,6 +84,9 @@ button { box-shadow: var(--shadow-sm); }
 button:hover { background: var(--btn-hover); border-color: var(--btn-hover-edge); }
 button:disabled { opacity: 0.4; cursor: default; }
 .subtle-btn { background: transparent; border-color: var(--panel-edge); color: var(--muted); }
+/* an action button that latches on/off (Loop travel). Same accent-border language as
+   .region-chip.active, so "engaged" reads the same wherever it appears. */
+.toggle-btn.on { border-color: var(--accent); background: rgba(110,92,255,0.10); color: var(--accent); }
 .play-btn { background: var(--accent); border-color: transparent; font-weight: 600; }
 .play-btn:hover { background: #7d6fff; }
 .play-btn.playing { background: var(--accent-2); }

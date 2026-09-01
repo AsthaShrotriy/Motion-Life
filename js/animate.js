@@ -74,6 +74,29 @@ const LIMB_PARENT = {
   'shin-l': 'leg-l', 'shin-r': 'leg-r',
 };
 
+/*
+ * WHICH ROLES READ THE DEPTH CHANNEL when the capture's stride is along the camera axis.
+ *
+ * A walk filmed head-on puts its whole stride into depth, where a 2D angle cannot see it.
+ * Measured on brisk-walk.mp4 (head-on, 62 frames): the thighs swing 3.5deg / 4.2deg in the
+ * picture plane against 52.1deg / 50.7deg in depth. The pose service says which axis actually
+ * carries the stride (gait.stride_axis) after testing that the legs alternate there; this is
+ * the list of roles that then follow it.
+ *
+ * LEGS ONLY, and that is measured too, not a hedge. Depth is a genuinely coarser estimate
+ * than position, so it is only worth taking where the picture plane has nothing:
+ *
+ *   role     picture plane            depth plane
+ *   thigh     3.5deg,  89% in band    52.1deg, 73% in band   <- depth wins, take it
+ *   arm-r     6.5deg,  47% in band   140.4deg, 52% in band   <- 140deg is a near-degenerate
+ *                                                               bone wrapping, not a swing
+ *
+ * Arm swing projects laterally from ANY viewpoint — which is why the arms measure the same
+ * ~15deg head-on and side-on, while only the legs collapse — so there was never anything for
+ * depth to recover in an arm. The head and torso have no stride in them at all.
+ */
+const LIMB_DEPTH_ROLES = new Set(['leg-l', 'leg-r', 'shin-l', 'shin-r']);
+
 /* MediaPipe's own visibility. Below this the landmark is an inference, not an observation. */
 const LIMB_VIS_OK = 0.5;
 
@@ -263,6 +286,33 @@ const closeLoop = (track) => {
   return track;
 };
 
+/*
+ * WHY A GAIT NEEDS TRIMMING BEFORE closeLoop, NOT JUST A BIGGER RAMP.
+ *
+ * closeLoop's note above reasons that "a genuinely cyclic bone already ends where it began,
+ * so there is nothing to subtract". That holds for a bone whose drift is real one-way slide.
+ * It does NOT hold for a clip cut mid-swing: a walk is perfectly cyclic and still ends far
+ * from where it started, because the recording stopped part-way through a stride. The drift
+ * closeLoop then measures is not slide to remove, it is phase — and subtracting it as a ramp
+ * tilts the whole track.
+ *
+ * Measured on brisk-walk (62 frames, ~4.4 stride cycles, legs driven from depth): the legs end
+ * 16.2deg from where they started, and the ramp needed to force that closed inflated the swing
+ * 21.0 -> 29.3deg (+39%) and REVERSED the cadence trend. The real stride accelerates, period
+ * 1.12s -> 1.00s; the ramped one decelerated, 0.83s -> 1.39s, and one of the eight half-cycles
+ * disappeared. That is a walk that no longer matches the video it came from.
+ *
+ * So drop the shortest tail that lets the loop close on its own, and leave the small remainder
+ * to closeLoop. The test is on the LEGS, whose alternation is what a stride cycle IS, and each
+ * leg is judged against its OWN range so the threshold means the same thing on a 20deg swing
+ * and a 50deg one. Measured: brisk-walk keeps 58/62 frames (94%, legs 20.1/18.9deg, cadence
+ * still rising 1.14 -> 1.01s); the side-on clip keeps 159/160 (99%, legs 42.6/51.4deg against
+ * 42.9/50.4 raw) — a clip that already looped cleanly barely moves. A rig with no usable leg
+ * pair, or one where no tail qualifies, keeps every frame and behaves exactly as before.
+ */
+const LIMB_LOOP_SEAM = 0.15;      // seam mismatch tolerated, as a fraction of that leg's range
+const LIMB_LOOP_MIN_KEEP = 0.55;  // never discard more of the clip than this to close a loop
+
 class Animator {
   constructor(selectionManager, motionLibrary) {
     this.sel = selectionManager;
@@ -359,10 +409,24 @@ class Animator {
       s._routeT0 = t;
       s._routeT0Rev = s.route.rev;
     }
-    // Travel the route ONCE and hold at the end point — no ping-pong back to the start.
-    // (A future Play button will replay all motions + travel together on demand.)
-    const p = Math.min(1, (t - s._routeT0) / dur);   // 0 .. 1, clamped at the destination
-    const f = p * p * (3 - 2 * p);                    // smoothstep ease-in-out
+    /*
+     * ONE-SHOT (default): travel the route once and hold at the end point — no ping-pong
+     * back to the start — eased in and out, because a journey with a start and a finish
+     * should not begin or end at full speed.
+     *
+     * LOOPING (route.loop, set by the Loop travel button): wrap round and go again, at a
+     * CONSTANT speed. The ease exists to soften a single arrival; on a loop there is no
+     * arrival to soften, and smoothstep would decelerate to a standstill at every lap seam
+     * and then pull away again — a visible hitch once per cycle that the drawn route never
+     * asked for. Linear also makes a CLOSED route (drawn back to its own first point) truly
+     * seamless. An open route still cuts back to the start each lap; that is inherent to
+     * looping a path that ends somewhere else, so the inspector measures the gap and says so
+     * rather than pretending the jump is not there.
+     */
+    const raw = (t - s._routeT0) / dur;
+    const loop = !!s.route.loop;
+    const p = loop ? raw - Math.floor(raw) : Math.min(1, raw);
+    const f = loop ? p : p * p * (3 - 2 * p);         // constant speed on a loop, else smoothstep
     const [x, y] = this._routeAt(tbl, f);
     const dx = x - tbl.x0, dy = y - tbl.y0;          // the first point is wherever the object already is
     s.wrap.setAttribute('transform',
@@ -1541,11 +1605,27 @@ class Animator {
           const l = f[jn[name === '@sho' ? 'l_sho' : 'l_hip']];
           const r = f[jn[name === '@sho' ? 'r_sho' : 'r_hip']];
           if (!l || !r) return null;
-          return [(l[0] + r[0]) / 2, (l[1] + r[1]) / 2, Math.min(l[2], r[2])];
+          const m = [(l[0] + r[0]) / 2, (l[1] + r[1]) / 2, Math.min(l[2], r[2])];
+          if (l.length > 3 && r.length > 3) m.push((l[3] + r[3]) / 2);
+          return m;
         }
         const i = jn[name];
         return i == null ? null : f[i];
       };
+
+      /*
+       * Which horizontal axis carries this role's motion: the picture's x, or depth.
+       *
+       * Depth is a 4th value on each joint and is absent from older swatches, so this falls
+       * back to x whenever it is missing — a pose file captured before the service emitted
+       * depth animates exactly as it did before. The service only says 'depth' after
+       * measuring that the legs alternate there (see gait.stride_axis), so this is following
+       * a measurement, not guessing from the viewpoint label.
+       */
+      const strideAxis = (pose.gait || {}).stride_axis;
+      const hasDepth = frames.length > 0 && frames[0].some(p => p && p.length > 3);
+      const useDepth = strideAxis === 'depth' && hasDepth;
+      const axisFor = role => (useDepth && LIMB_DEPTH_ROLES.has(role)) ? 3 : 0;
 
       const bbOf = el => { try { return el.getBBox(); } catch (_) { return null; } };
       const pivotAttr = (el) => {
@@ -1630,13 +1710,19 @@ class Animator {
         if (!bone || !b) continue;                      // unknown role: leave it alone
 
         // ---- the bone's angle track, with both gates ----
+        // The length gate is measured in the SAME plane as the angle. A gate in a different
+        // plane can reject a frame the angle is fine in — a leg foreshortened in x may be
+        // fully extended in depth, which is exactly the case depth exists to handle.
+        // Measured, this costs nothing either way: 0 of 62 frames gated in both planes on
+        // brisk-walk, 0 of 534 on walk-man-side (one bone, shin-l, gates 8 frames in depth).
+        const ax = axisFor(role);
         const lens = [], angs = [];
         for (const f of frames) {
           const p = jointAt(f, bone[0]), q = jointAt(f, bone[1]);
           if (!p || !q) { lens.push(null); angs.push(null); continue; }
-          const L = Math.hypot(q[0] - p[0], q[1] - p[1]);
+          const L = Math.hypot(q[ax] - p[ax], q[1] - p[1]);
           lens.push(Math.min(p[2], q[2]) >= LIMB_VIS_OK ? L : null);
-          angs.push(Math.atan2(q[1] - p[1], q[0] - p[0]));
+          angs.push(Math.atan2(q[1] - p[1], q[ax] - p[ax]));
         }
         const seen = lens.filter(v => v != null).sort((x, y) => x - y);
         const medLen = seen.length ? seen[Math.floor(seen.length / 2)] : 0;
@@ -1708,10 +1794,40 @@ class Animator {
         }
       }
 
+      /*
+       * Trim to the longest self-closing loop FIRST, so closeLoop only ever has a small
+       * remainder to flatten — see the LIMB_LOOP_SEAM note. Judged on the legs, because a
+       * stride cycle is defined by their alternation; a rig with no usable leg pair keeps
+       * every frame, which is what every non-walking capture did before this existed.
+       */
+      const nFull = frames.length;
+      let nKeep = nFull;
+      const legPair = ['leg-l', 'leg-r'].map(r => byRole.get(r))
+        .filter(g => g && g.usable && g.track.length === nFull);
+      if (legPair.length === 2) {
+        const spans = legPair.map(g => {
+          let lo = Infinity, hi = -Infinity;
+          for (const v of g.track) { if (v < lo) lo = v; if (v > hi) hi = v; }
+          return hi - lo;
+        });
+        if (spans.every(r => r > 0)) {
+          const floor = Math.max(4, Math.round(nFull * LIMB_LOOP_MIN_KEEP));
+          for (let nn = nFull; nn >= floor; nn--) {
+            if (legPair.every((g, k) =>
+                Math.abs(g.track[nn - 1] - g.track[0]) <= LIMB_LOOP_SEAM * spans[k])) {
+              nKeep = nn; break;
+            }
+          }
+        }
+      }
+      // Every limb has to end on the same frame or they would drift out of step with each
+      // other, so the trim chosen from the legs is applied to all of them.
+      if (nKeep < nFull) for (const g of limbs) g.track.length = nKeep;
+
       // The clip is not cyclic and the animation loops it, so the drift has to come out or it
-      // comes out all at once at the seam — see closeLoop. After mirroring, on the final
-      // signed track, and before restDeg is used, since closeLoop preserves the mean it is a
-      // circular mean of.
+      // comes out all at once at the seam — see closeLoop. After mirroring and trimming, on
+      // the final signed track, and before restDeg is used, since closeLoop preserves the mean
+      // it is a circular mean of.
       for (const g of limbs) closeLoop(g.track);
 
       /* Retarget only where there is something real to retarget to. A limb with no usable
@@ -1723,6 +1839,36 @@ class Animator {
       for (const g of limbs) g.retarget = !!(g.usable && g.drawn != null && wanted(g.role));
       const order = [...limbs].sort((a, b) => a.chain.length - b.chain.length);
 
+      /*
+       * THE STATIC PART OF RETARGETING IS ONLY MEANINGFUL WHEN BOTH ANGLES ARE IN THE SAME
+       * PLANE, AND FOR A DEPTH-DRIVEN ROLE THEY ARE NOT.
+       *
+       * restDeg is measured on axisFor(role): the picture plane normally, but the DEPTH plane
+       * for a leg or shin once the service reports a head-on stride. drawn is always the
+       * picture plane — it is read off the artwork, which has no depth. Subtracting one from
+       * the other is only valid when the two planes happen to agree.
+       *
+       * Measured on brisk-walk (62 frames, head-on): in the picture plane every bone rests
+       * straight down — thighs 91.1/87.9deg, shins 95.0/85.0. In the depth plane the THIGHS
+       * still read 83.3/84.5, which is why this was invisible while thighs were the only
+       * depth-driven role: the offset came out 0.1deg and 1.7deg. The SHINS read 53.9/56.8 —
+       * a 30-38deg lean that is MediaPipe's coarse z, not a posture. Retargeting to it put a
+       * permanent 36-40deg bend in the girl's knees: they measured 15..52deg of flex and never
+       * once straightened.
+       *
+       * So a depth-driven role keeps the SWING (deltas about its own rest, both in the same
+       * plane, which is sound) and drops the static offset. It must NOT simply stop
+       * retargeting: the non-retarget path does not subtract ancestors, and a shin's track is
+       * an ABSOLUTE bone angle that already contains its thigh's rotation, so the thigh would
+       * be applied to it twice. Keeping the offset at zero preserves the subtraction.
+       *
+       * Thighs are unaffected either way (0.1/1.7deg), so no previously measured figure moves.
+       */
+      for (const g of limbs) {
+        g.restOffset = (g.drawn == null) ? 0
+          : (axisFor(g.role) === 0 ? deg180(g.restDeg - g.drawn) : 0);
+      }
+
       /* What 'all' WOULD cost this figure, whatever mode is actually in force: each limb's
        * one-off offset with the swing at zero, resolved the same way (see the own-rotation
        * note below). This is the number that decides whether whole-figure retargeting holds a
@@ -1733,10 +1879,12 @@ class Animator {
         if (!g.usable || g.drawn == null) continue;
         let acc = 0;
         for (const p of g.chain) acc += offsets.get(p) || 0;
-        offsets.set(g, deg180(g.restDeg - g.drawn - acc));
+        offsets.set(g, deg180(g.restOffset - acc));
       }
 
-      s._limb = { limbs, order, fps: pose.fps || 15, n: frames.length, mirror, mode,
+      // n is the PLAYED length, which is the trimmed one — the frames past the loop point are
+      // deliberately not shown, so playback must not index into them.
+      s._limb = { limbs, order, fps: pose.fps || 15, n: nKeep, captured: nFull, mirror, mode,
                   offsets: [...offsets].map(([g, deg]) => ({ role: g.role, deg })) };
       s._limbMotion = motion.id;
       s._limbRetarget = mode;
@@ -1771,7 +1919,7 @@ class Animator {
       if (!g.retarget) { own.set(g, swing(g)); continue; }
       let acc = 0;
       for (const p of g.chain) acc += own.get(p) || 0;
-      own.set(g, deg180(g.restDeg + swing(g) - g.drawn - acc));
+      own.set(g, deg180(g.restOffset + swing(g) - acc));
     }
     const rot = (g) => `rotate(${(own.get(g) || 0).toFixed(2)} ${g.px.toFixed(1)} ${g.py.toFixed(1)})`;
     for (const g of L.limbs) {
