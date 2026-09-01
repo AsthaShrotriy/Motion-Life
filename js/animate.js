@@ -75,6 +75,53 @@ const LIMB_PARENT = {
 };
 
 /*
+ * THE SEGMENT BELOW EACH LIMB — and what to do when the artwork does not have one.
+ *
+ * LIMB_BONES pairs arm-l with shoulder->elbow because that is the upper arm. But most artwork
+ * has no elbow: the suitcase's arm is a single stroke from its shoulder to its glove, and the
+ * girl has shins but no forearms. Driving a one-piece arm by the upper-arm sub-bone throws away
+ * every degree the elbow contributed, and in a wave that is nearly all of them. Measured on the
+ * three shipped clips, sub-bone vs the CHORD from the joint straight to the far tip:
+ *
+ *   clip                  arm-l         arm-r          leg-l         leg-r
+ *   WhatsApp 12.26 wave   34.5 -> 78.0  44.4 -> 86.8   35.5 -> 35.3  30.1 -> 32.8
+ *   dance-arms-overhead   91.7 -> 89.5  90.0 -> 88.2   16.1 -> 32.5  18.5 -> 24.6
+ *   walk-man              15.3 -> 13.9  21.8 -> 12.8   26.1 -> 31.3  28.6 -> 29.9
+ *
+ * The wave more than doubles, because its swing lives in the forearm. The dance's arms are
+ * unchanged (within 2.2deg) because that dancer's arms are straight, and its LEGS double —
+ * which is the same finding the dance swatch's own description records as "the visible knee
+ * lifts are SHIN flexion, which a thigh bone cannot carry". walk-man's right arm goes the other
+ * way, 21.8 -> 12.8: in a walk the elbow is bent and roughly cancels the shoulder, so the hand
+ * travels less than the upper arm does. That is not a bug to route around, it is what a rigid
+ * arm drawn shoulder-to-hand should do — and taking whichever number is larger would make the
+ * rig's geometry depend on the clip, which is not a rig.
+ *
+ * So: this is a fallback keyed on the ARTWORK, never on the clip. If the artist drew the child
+ * segment and it is tagged, each segment takes its own bone as before. Only when the child is
+ * absent does the parent stand in for the whole limb and follow the chord.
+ *
+ * ONE MORE GATE, and it is not an amplitude gate. A chord ends at a tip joint the capture may
+ * never see: in walk-man (a man walking AWAY, hands swinging in front of his hips) l_wri clears
+ * the visibility floor in 0 of 155 frames, median confidence 0.136, and r_wri in 31 of 155. With
+ * no usable frame the angle track holds 0 and the arm stops dead — measured on the suitcase, the
+ * chord took arm-l from 11.1deg of applied rotation to exactly 0.0. Losing swing to a cancelling
+ * elbow is the artwork's geometry being honest; losing it to a joint the capture never resolved
+ * is just missing data. So the chord is used only when its tip is visible in at least
+ * LIMB_CHORD_MIN_VIS of frames, and otherwise the sub-bone stands. That is keyed on whether the
+ * DATA EXISTS, not on which bone happens to swing further, so it still cannot be talked into
+ * picking the flattering number.
+ */
+const LIMB_CHILD = {
+  'arm-l': 'forearm-l', 'arm-r': 'forearm-r',
+  'leg-l': 'shin-l', 'leg-r': 'shin-r',
+};
+/* Half the clip. Below that the chord would be interpolated more than it is measured, and the
+ * sub-bone — whose joints these captures do resolve, 155/155 on both shoulders and elbows — is
+ * the better reading of a limb even though it is the shorter one. */
+const LIMB_CHORD_MIN_VIS = 0.5;
+
+/*
  * WHICH ROLES READ THE DEPTH CHANNEL when the capture's stride is along the camera axis.
  *
  * A walk filmed head-on puts its whole stride into depth, where a 2D angle cannot see it.
@@ -1701,6 +1748,19 @@ class Animator {
       const useDepth = strideAxis === 'depth' && hasDepth;
       const axisFor = role => (useDepth && LIMB_DEPTH_ROLES.has(role)) ? 3 : 0;
 
+      // How much of the clip actually resolved both ends of a bone. Used to decide whether a
+      // one-piece limb may follow its chord (see LIMB_CHORD_MIN_VIS) — a tip joint the capture
+      // never saw would otherwise freeze the limb rather than merely shorten its swing.
+      const visFrac = (bone) => {
+        if (!frames.length) return 0;
+        let n = 0;
+        for (const f of frames) {
+          const p = jointAt(f, bone[0]), q = jointAt(f, bone[1]);
+          if (p && q && Math.min(p[2], q[2]) >= LIMB_VIS_OK) n++;
+        }
+        return n / frames.length;
+      };
+
       const bbOf = el => { try { return el.getBBox(); } catch (_) { return null; } };
       const pivotAttr = (el) => {
         const v = el && el.dataset && el.dataset.pivot;
@@ -1779,7 +1839,16 @@ class Animator {
       const limbs = [];
       for (const el of wrap.querySelectorAll('[data-limb]')) {
         const role = el.dataset.limb;
-        const bone = LIMB_BONES[role];
+        // One rigid segment spans the WHOLE limb, so it follows the chord to the far tip rather
+        // than its first sub-bone — see LIMB_CHILD. Keyed on whether the artist tagged the child
+        // segment, so a rig that does have a forearm is untouched, and only taken when the
+        // capture actually resolved the tip.
+        const kid = LIMB_CHILD[role];
+        let bone = LIMB_BONES[role];
+        if (kid && LIMB_BONES[kid] && !wrap.querySelector(`[data-limb="${kid}"]`)) {
+          const chord = [bone[0], LIMB_BONES[kid][1]];
+          if (visFrac(chord) >= LIMB_CHORD_MIN_VIS) bone = chord;
+        }
         const b = bbOf(el);
         if (!bone || !b) continue;                      // unknown role: leave it alone
 
