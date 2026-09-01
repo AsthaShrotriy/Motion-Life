@@ -358,6 +358,14 @@ const FILE_SCENES = {
   // without data-limb a pose swatch cannot articulate them and the whole figure wobbles
   // in place. Pivots were measured off the path geometry, not eyeballed (see the file).
   station: 'assets/scenes/scene2-station.svg',
+  // The SAME station artwork exactly as the artist saved it: named layers ("Left Hand",
+  // "Right Leg", …) and NOT ONE data-limb or data-pivot in the file. It is here as the
+  // fixture for js/autorig.js — load it and the rig has to appear from the names alone.
+  // Keeping both copies is the point: `station` proves hand-authored tags still win,
+  // `stationLabels` proves nothing has to be hand-authored. Driven by
+  // assets/videos/dance-arms-overhead.mp4 the two agree to within 0.1deg on all four
+  // limbs (113.4 / 91.9 / 18.0 / 19.4), at the same 3.90s = n/fps period.
+  stationLabels: 'assets/scenes/scene2-labels-only.svg',
 };
 
 async function loadScene(name) {
