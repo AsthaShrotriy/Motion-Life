@@ -547,7 +547,9 @@ main.right-collapsed #right-panel { overflow: visible; }
 /* ---- header center ---- */
 .header-center { flex: 1; display: flex; justify-content: center; }
 
-#upload-status { font-size: 11px; color: var(--muted); margin-top: 6px; }
+/* pre-line so a multi-line message (e.g. the "no walk cycle in this clip" measurement the
+   pose service returns) reads as its own line instead of running into the line above. */
+#upload-status { font-size: 11px; color: var(--muted); margin-top: 6px; white-space: pre-line; }
 
 /* ---- canvas section ---- */
 #canvas-section { display: flex; flex-direction: column; min-height: 0; }

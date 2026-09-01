@@ -159,6 +159,110 @@ const LIMB_TIP_SAMPLES = 64;
 /* Shortest-arc normalisation to -180..180, sign preserved. */
 const deg180 = (d) => ((d + 180) % 360 + 360) % 360 - 180;
 
+/*
+ * WHERE BETWEEN TWO CAPTURED FRAMES a given instant falls.
+ *
+ * A pose swatch holds about twelve to fifteen frames per second and no more — pose_server.py
+ * decimates every clip towards 15fps before MediaPipe reads it, by a whole-frame step
+ * (`round(src_fps / 15)`), so a 23.976fps source like walk-man.mp4 lands on 11.988. A display
+ * paints at 60. Indexing the track with Math.floor therefore showed each captured pose for
+ * four or five display frames: measured on the walk swatch at 14.5 distinct leg poses per
+ * second, each held 66.7ms, while consecutive captured frames differ by as much as 11.7deg on
+ * a leg. That snap is what "the motion is not smooth" was — not dropped browser frames.
+ *
+ * Interpolating adds no motion that was not measured. At every instant the capture actually
+ * sampled, the value is still exactly the captured one; only the 66ms of nothing between two
+ * samples is filled, and it is filled from the two frames that BRACKET it rather than by
+ * holding the older one until the next arrives. _sampleCentreline has always done this for
+ * extracted cloth (see its bilinear-in-time note); the pose paths were the outliers.
+ *
+ * Blending wraps from the last frame to the first. A captured clip is not cyclic, so that seam
+ * carries the clip's whole net drift in one frame interval; the limb path removes the drift
+ * from the track first, which is what makes the wrap continuous rather than a flick — see
+ * closeLoop. The two whole-figure paths below still take the cut.
+ */
+const framePos = (t, fps, n) => {
+  const p = (((t * fps) % n) + n) % n;   // a rewound clock (t<0) must not index -1
+  const i0 = Math.floor(p);
+  return { i0, i1: (i0 + 1) % n, f: p - i0 };
+};
+/* Blend two scalars (positions, deflections — nothing that wraps). */
+const lerp = (a, b, f) => a + (b - a) * f;
+/* Blend two angles in DEGREES the short way round, so a track that crosses +-180 does not
+ * sweep the long arc to get to a neighbour a fraction of a degree away. */
+const lerpDeg = (a, b, f) => a + deg180(b - a) * f;
+
+/*
+ * SMOOTH interpolation of an angle track — a Catmull-Rom spline through the captured samples,
+ * cyclic, short-way-round.
+ *
+ * lerpDeg gets the value at every instant right and the VELOCITY wrong. Straight lines between
+ * samples means the speed jumps at every captured frame: the curve is continuous but its
+ * derivative is not, and a corner in velocity is what the eye reads as a limb that jerks
+ * rather than swings. Measured on the walk-man capture driving the girl, sampled at 60Hz:
+ * the second difference of the applied leg rotation peaks at 0.59deg (right) and 0.91deg
+ * (left) on a mean per-frame step of 0.17deg — a velocity kink of several times the frame's
+ * own motion, arriving 12 times a second.
+ *
+ * Catmull-Rom passes exactly THROUGH every captured sample, so this adds no measurement and
+ * changes none: at each instant the capture sampled, the value is identical to what lerpDeg
+ * gave. Only the tangent between samples changes, from "whatever the next sample demands" to
+ * the average slope of the two neighbours, which is what makes the joins C1.
+ *
+ * It can overshoot the bracketing pair where the track has a sharp extremum — that is the
+ * price of the smooth tangent, it is bounded by the neighbour spacing, and LIMB_DEG_MAX still
+ * caps the result. Measured on the same clip, worst overshoot past the captured min/max over
+ * all six limbs at 20 substeps per interval: 0.16deg, on ranges of 9-30deg. Small because a
+ * pose track sampled at 12fps has no isolated spikes for the spline to round off.
+ *
+ * Deltas are taken relative to p1 through deg180 for the same reason lerpDeg does it.
+ */
+const splineDeg = (track, i0, f, n) => {
+  const p1 = track[i0] || 0;
+  if (n < 4) return lerpDeg(p1, track[(i0 + 1) % n] || 0, f);
+  const d0 = deg180((track[(i0 - 1 + n) % n] || 0) - p1);
+  const d2 = deg180((track[(i0 + 1) % n] || 0) - p1);
+  const d3 = deg180((track[(i0 + 2) % n] || 0) - p1);
+  const m1 = (d2 - d0) / 2, m2 = (d3 - 0) / 2;         // tangents at p1 and p2
+  return p1 + f * m1
+            + f * f * (3 * d2 - 2 * m1 - m2)
+            + f * f * f * (m1 + m2 - 2 * d2);
+};
+
+/*
+ * CLOSE THE LOOP of an angle track, in place, by removing its net drift.
+ *
+ * A captured clip is not cyclic, and the animation plays it round and round. Whatever the
+ * track has drifted by over the clip therefore has to be undone in the single frame interval
+ * where the last sample hands over to the first — an 83ms snap. Measured on walk-man.mp4
+ * driving the girl, as applied rotation at 60Hz: the head jumped 37.96deg across that one
+ * interval against a fastest in-loop step of 0.66deg, so the seam moved the head 58x faster
+ * than anything in the walk did. That once-per-loop flick is what "she is bobbing her head"
+ * was. The legs snapped 11.93 and 8.25deg at the same instant.
+ *
+ * The drift is an artifact, not the walk. walk-man.mp4 is filmed from BEHIND, so MediaPipe is
+ * inferring a nose it cannot see on the back of a head that is getting smaller; the inferred
+ * nose slides steadily sideways over the clip. Spreading its removal evenly across the track
+ * takes out exactly the component that fails to repeat and leaves every oscillation that does.
+ *
+ * The correction is self-scaling, which is the reason to prefer it over cross-fading a window:
+ * a genuinely cyclic bone already ends where it began, so there is nothing to subtract. On the
+ * same clip the torso drifts 1.14deg and keeps its full 8.4deg swing, while the head drifts
+ * 37.99deg and its range falls 44.94 -> 23.78deg. The head loses half its motion because half
+ * of it was one-way slide.
+ *
+ * The line is subtracted about the track's MIDPOINT, not its start, so the mean is unchanged —
+ * restDeg is a circular mean of these same angles and retargeting aims the drawing at it, so
+ * shifting the mean here would tilt the limb's neutral pose by half the drift.
+ */
+const closeLoop = (track) => {
+  const n = track.length;
+  if (n < 4) return track;
+  const drift = deg180(track[n - 1] - track[0]) / n;
+  for (let i = 0; i < n; i++) track[i] -= drift * (i - (n - 1) / 2);
+  return track;
+};
+
 class Animator {
   constructor(selectionManager, motionLibrary) {
     this.sel = selectionManager;
@@ -1604,6 +1708,12 @@ class Animator {
         }
       }
 
+      // The clip is not cyclic and the animation loops it, so the drift has to come out or it
+      // comes out all at once at the seam — see closeLoop. After mirroring, on the final
+      // signed track, and before restDeg is used, since closeLoop preserves the mean it is a
+      // circular mean of.
+      for (const g of limbs) closeLoop(g.track);
+
       /* Retarget only where there is something real to retarget to. A limb with no usable
        * frame has a rest angle of 0 that means "we never saw this bone", and rotating the
        * drawing to it would be an invention; it holds its drawn pose instead. Resolve
@@ -1634,14 +1744,16 @@ class Animator {
 
     const L = s._limb;
     if (!L.n || !L.limbs.length) return;
-    const fi = Math.floor((t * L.fps) % L.n);
+    // Between captured frames, not at the nearest one — see framePos.
+    const { i0, f: ft } = framePos(t, L.fps, L.n);
     // LIMB_DEG_MAX is clamped HERE, after intensity, not when the track was built. Clamping
     // the raw delta first let intensity scale straight past the cap: on the walk-man capture
     // the head's largest raw delta is +28.2deg, which passes a raw clamp untouched and then
     // becomes 112.8deg at intensity 4. Clamping last holds it at exactly 75deg, so the cap
-    // is a guarantee at every intensity rather than only at 1.
+    // is a guarantee at every intensity rather than only at 1. Clamping after the BLEND too,
+    // so a value that only reaches the cap partway between two frames is still held there.
     const swing = (g) => Math.max(-LIMB_DEG_MAX,
-      Math.min(LIMB_DEG_MAX, (g.track[fi] || 0) * intensity));
+      Math.min(LIMB_DEG_MAX, splineDeg(g.track, i0, ft, L.n) * intensity));
 
     /*
      * Each limb's own rotation for this frame, ancestors first.
@@ -1769,7 +1881,10 @@ class Animator {
     }
     const w = s._wing, n = w.up.length;
     if (!n || !w.wings.length) return;
-    const u = w.up[Math.floor((t * w.fps) % n)];
+    // Between captured frames, not at the nearest one — see framePos. `up` is a normalized
+    // -1..+1 scalar, so a plain lerp is right; nothing here wraps.
+    const wp = framePos(t, w.fps, n);
+    const u = lerp(w.up[wp.i0], w.up[wp.i1], wp.f);
     // 26 deg of sweep at full intensity. A positive rotate() is clockwise on screen,
     // which LIFTS a wing reaching up-left and DROPS one reaching up-right — hence the
     // mirrored sign per side, so both wings rise together.
@@ -1827,8 +1942,13 @@ class Animator {
     }
     const c = s._char, jn = c.jn, F = c.frames, n = F.length;
     if (!n) { return; }
-    const fi = Math.floor((t * c.fps) % n);
-    const f = F[fi];
+    // Between captured frames, not at the nearest one — see framePos. Blend joint by joint:
+    // these are POSITIONS in a normalized frame, so a plain lerp is right. A midpoint of two
+    // captured joints is not an invented joint — it is where the joint was on its way between
+    // two things the capture actually saw.
+    const cp = framePos(t, c.fps, n);
+    const A = F[cp.i0], B = F[cp.i1];
+    const f = A.map((p, j) => [lerp(p[0], B[j][0], cp.f), lerp(p[1], B[j][1], cp.f)]);
     const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
     const hipC = mid(f[jn.l_hip], f[jn.r_hip]);
     const shoC = mid(f[jn.l_sho], f[jn.r_sho]);

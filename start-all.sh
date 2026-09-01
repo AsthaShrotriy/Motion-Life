@@ -11,7 +11,13 @@
 cd "$(dirname "$0")"
 mkdir -p logs
 
-PORTS="8000 8765 8770 8771 8772"
+# These MUST match the URLs the browser fetches (js/capture.js, js/judge.js): RAFT :8865,
+# pose :8870, router :8871. The services' own defaults are 87xx, so the three the browser
+# talks to are moved with their env vars below. Get this wrong and there is no error to see:
+# capture.js swallows a failed router call, so upload silently drops to the manual RAFT
+# heuristic and a walking clip stops reaching MediaPipe. Preprocess stays on :8772 — it is
+# only ever called from a shell or a test, never from the page.
+PORTS="8000 8865 8870 8871 8772"
 
 status() {
   for p in $PORTS; do
@@ -66,7 +72,7 @@ pick_py312() {
   return 1
 }
 
-[ -f .env ] || echo "⚠️  no .env — the VLM router (:8771) will 500. Run: sh setkey.sh"
+[ -f .env ] || echo "⚠️  no .env — the VLM router (:8871) will 500. Run: sh setkey.sh"
 
 echo "Starting MotionLife…"
 
@@ -78,14 +84,14 @@ pgrep -f "http.server 8000" >/dev/null || \
 ensure_venv service/venv service/requirements.txt python3
 pgrep -f "server:app" >/dev/null || \
   { [ -x service/venv/bin/uvicorn ] && \
-    (service/venv/bin/uvicorn --app-dir service server:app --host 127.0.0.1 --port 8765 \
-       >logs/raft.log 2>&1 &) && echo "  :8765 RAFT + registry"; }
+    (service/venv/bin/uvicorn --app-dir service server:app --host 127.0.0.1 --port 8865 \
+       >logs/raft.log 2>&1 &) && echo "  :8865 RAFT + registry"; }
 
 # 3. VLM router (needs .env key) — routervenv shared with preprocess
 ensure_venv routervenv service/requirements-router.txt python3
 pgrep -f "vlm_router.py" >/dev/null || \
   { [ -x routervenv/bin/python ] && \
-    (routervenv/bin/python service/vlm_router.py >logs/router.log 2>&1 &) && echo "  :8771 VLM router"; }
+    (ROUTER_PORT=8871 routervenv/bin/python service/vlm_router.py >logs/router.log 2>&1 &) && echo "  :8871 VLM router"; }
 
 # 4. Preprocess (mask + camera) — reuses routervenv (created above)
 pgrep -f "preprocess_server.py" >/dev/null || \
@@ -94,7 +100,7 @@ pgrep -f "preprocess_server.py" >/dev/null || \
 
 # 5. MediaPipe pose/hands/face — needs its own py<=3.12 venv (./mpvenv)
 if pgrep -f "pose_server.py" >/dev/null; then
-  echo "  :8770 pose (already running)"
+  echo "  :8870 pose (already running)"
 else
   if [ ! -d mpvenv ]; then
     PY312=$(pick_py312)
@@ -102,11 +108,11 @@ else
       echo "  · using $PY312 for MediaPipe (needs Python 3.9–3.12)"
       ensure_venv mpvenv service/requirements-pose.txt "$PY312"
     else
-      echo "  :8770 SKIPPED — no Python 3.9–3.12 found for MediaPipe. Install one, then rerun."
+      echo "  :8870 SKIPPED — no Python 3.9–3.12 found for MediaPipe. Install one, then rerun."
     fi
   fi
   [ -x mpvenv/bin/python ] && \
-    (mpvenv/bin/python service/pose_server.py >logs/pose.log 2>&1 &) && echo "  :8770 MediaPipe pose"
+    (POSE_PORT=8870 mpvenv/bin/python service/pose_server.py >logs/pose.log 2>&1 &) && echo "  :8870 MediaPipe pose"
 fi
 
 echo "Waiting for services to come up…"; sleep 10

@@ -27,8 +27,17 @@ window.handleMotionUpload = async (e) => {
   const reveal = window.startExtractionReveal ? window.startExtractionReveal(videoUrl) : null;
   const say = (t) => { $('upload-status').textContent = t; if (reveal) reveal.setStatus(t); };
 
-  const wrapIsRig = (w) => w && ((w.matches && w.matches('[data-motion-mode="character"]')) ||
-                                 w.querySelector('[data-motion-mode="character"], [data-role="body"]'));
+  // Every tag the animator will actually take a pose branch on — kept in step with the three
+  // gates at the top of Animator._applyOne (data-limb, then the wing pair, then the character
+  // rig). It used to list only the last of the three, so a LIMB-rigged figure like the girl
+  // scene was reported as "not rigged → whole-body puppet" while the animator was in fact
+  // rotating her seven tagged limbs. The animation was right and the sentence describing it
+  // was wrong, which is the worse of the two failures to leave in place. The same predicate
+  // also picks the upload's target, so a limb rig in the scene is now found rather than
+  // skipped over.
+  const RIG_TAGS = '[data-limb], [data-role="wing-l"], [data-role="wing-r"],' +
+                   '[data-motion-mode="character"], [data-role="body"]';
+  const wrapIsRig = (w) => w && ((w.matches && w.matches(RIG_TAGS)) || w.querySelector(RIG_TAGS));
 
   // ===== VLM AUTO-ROUTE ==========================================================
   // The router LOOKS AT THE CLIP and picks the extractor — you don't declare the type.
@@ -92,8 +101,17 @@ window.handleMotionUpload = async (e) => {
         e.target.value = ''; return;
       }
       const name = file.name.replace(/\.[^.]+$/, '') || 'Character Motion';
+      // Did the clip actually contain a walk cycle? pose_server measures this (see
+      // _gait_coherence) because the rig cannot: a track of detection jitter is still a
+      // track, so a clip filmed head-on animates as convincingly-shaped nonsense and looks
+      // like a broken animator. `gait` is absent on older responses — no warning then, not
+      // a false all-clear.
+      const gait = pose.gait && typeof pose.gait === 'object' ? pose.gait : null;
+      const noGait = gait && gait.walkable === false ? gait : null;
       const motion = {
-        id: 'char-' + Date.now(), name, desc: `Character motion · MediaPipe (${pose.detected}/${pose.total} frames)`,
+        id: 'char-' + Date.now(), name,
+        desc: `Character motion · MediaPipe (${pose.detected}/${pose.total} frames)`
+              + (noGait ? `\n⚠ ${noGait.note}` : ''),
         color: '#34d399', character: true,
         pose: { joints: pose.joints, fps: pose.fps, frames: pose.frames.filter(Boolean) },
         params: { frequency: 1, amplitude: 0.2, direction: 0, turbulence: 0, damping: 0, phaseSpread: 0 },
@@ -110,6 +128,14 @@ window.handleMotionUpload = async (e) => {
       } else {
         $('upload-status').textContent = `Added "${name}" — click an object to apply it.`;
         status(`Character motion "${name}" captured (MediaPipe). Click an object to apply it.`, true);
+      }
+      if (noGait) {
+        // Said LAST so it is what stays on screen: the capture succeeded, and the thing the
+        // user needs to know is that what it captured is not a walk. Not flashed as success,
+        // and it reports the measurement rather than a verdict about their clip.
+        $('upload-status').textContent += `\n⚠ ${noGait.note}`;
+        status(`⚠ "${name}": no walk cycle in this clip (foot gap ${noGait.foot_gap}, `
+               + `repeat ${noGait.periodicity}) — the rig has jitter to replay, not a stride.`);
       }
     } catch (err) {
       if (reveal) reveal.finish();
