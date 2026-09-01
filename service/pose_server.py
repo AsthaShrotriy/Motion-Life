@@ -522,8 +522,12 @@ def _clip_scale_and_anchors(raws):
     return max(1e-3, max(max(xs) - min(xs), max(ys) - min(ys))), anchors
 
 
-def _normalize_clip(raws, aspect=1.0):
+def _normalize_clip(raws, aspect=1.0, out=None):
     """raws -> [[x,y,vis(,z)]x13] per frame in 0..1, via ONE affine transform per clip.
+
+    `out`, when a dict is passed, receives the ROOT TRACK: out["root"] is one [dx,dy] per
+    frame (None where undetected) giving the anchor's own movement, mean-centred, in the
+    SAME units as the returned frames. See the note on `cen` below for why it exists.
 
     A 4th slot carries relative DEPTH when the caller supplied it (see extract_pose_b).
     It is appended rather than inserted so every consumer that reads [0],[1],[2] is
@@ -576,6 +580,31 @@ def _normalize_clip(raws, aspect=1.0):
     ext = max(1e-6, x1 - x0, y1 - y0)            # ONE constant for the whole clip
     padx = (ext - (x1 - x0)) / 2                 # centre the shorter axis in the box
     pady = (ext - (y1 - y0)) / 2
+    # ── the anchor's own movement, kept instead of thrown away ────────────────────────────
+    # Anchoring at the hip is what stops the arms rescaling the torso, but it also subtracts
+    # every bit of the subject's TRANSLATION — the sway, the bob, the hop. That is not a
+    # rounding loss: measured on the dance clip, the hip centre travels 49.9% of a torso
+    # sideways and 15.6% vertically, and after anchoring both come back as a range of
+    # 0.0000. The limb angles are all that survive, which is why a figure driven by this
+    # bobs on the spot however hard it swings its arms.
+    #
+    # Tilt and squash need no rescue — they are DIFFERENCES within one frame (shoulder to
+    # shoulder, shoulder to hip), so the anchor cannot touch them. Translation is the only
+    # channel the normalization destroys, so translation is the only one shipped back.
+    #
+    # Mean-centred, not first-frame-centred: a clip that starts mid-sway would otherwise
+    # begin with a constant offset and the whole figure would sit off its mark.
+    if out is not None:
+        pres = [(a, f) for a, f in zip(anchors, cen) if a is not None and f is not None]
+        if pres:
+            mx = statistics.fmean([a[0] for a, _ in pres])
+            my = statistics.fmean([a[1] for a, _ in pres])
+            out["root"] = [None if a is None else
+                           [round((a[0] - mx) / scale / ext, 4),
+                            round((a[1] - my) / scale / ext, 4)]
+                           for a in anchors]
+        else:
+            out["root"] = [None] * len(raws)
     return [None if f is None else
             [[round((p[0] - x0 + padx) / ext, 4), round((p[1] - y0 + pady) / ext, 4),
               round(float(p[2]), 3)] + ([round(p[3] / ext, 4)] if depth else [])
@@ -619,7 +648,9 @@ def extract_pose_b(path):
     raws = [None if not pts else
             {n: (p[0], p[1], p[2], p[3] * zk) for n, p in pts.items()} for pts in raws]
     # Normalize over the WHOLE clip, not frame by frame — see _normalize_clip.
-    frames = _normalize_clip(raws, aspect)
+    # `norm` collects the root track the anchoring would otherwise discard.
+    norm = {}
+    frames = _normalize_clip(raws, aspect, out=norm)
     detected = sum(1 for f in frames if f)
     vis = [tri[2] for f in frames if f for tri in f]
     conf = sum(vis) / len(vis) if vis else 0.0
@@ -643,6 +674,28 @@ def extract_pose_b(path):
     # fps matters here: the gait band is in Hz, so scoring a 12fps clip as if it were 15
     # would look for the cycle in the wrong bins.
     sw["gait"] = _gait_coherence(frames_b, eff_fps)
+    # The subject's TRANSLATION, alongside the joint angles rather than baked into them.
+    # A consumer that ignores this key animates exactly as it did before, so every swatch
+    # already on disk stays valid; one that reads it gets the sway and the bob back.
+    # Gap-filled the same way the frames are, so a dropped detection does not leave a hole
+    # the renderer has to guess across — carried forward from the last seen root, since a
+    # missing frame means the detector lost the subject, not that the subject teleported.
+    root = norm.get("root") or [None] * len(frames)
+    last = [0.0, 0.0]
+    filled_root = []
+    for r in root:
+        if r is not None:
+            last = r
+        filled_root.append(list(last))
+    sw["root"] = filled_root
+    # What the root actually carries, so a caller can decide whether it is worth driving
+    # anything with instead of measuring the track itself. In torso-scale units, i.e. 0.5
+    # means the hips travelled half a torso length.
+    if any(r is not None for r in root):
+        rx = [r[0] for r in filled_root]
+        ry = [r[1] for r in filled_root]
+        sw["root_travel"] = {"x": round(max(rx) - min(rx), 4),
+                             "y": round(max(ry) - min(ry), 4)}
     return contracts.normalize_skeleton_swatch(sw)[0]
 
 

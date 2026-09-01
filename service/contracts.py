@@ -368,6 +368,15 @@ def normalize_skeleton_swatch(raw):
     # here is how it went missing before: the client asked for `gait` and always got null.
     if isinstance(raw.get("gait"), dict):
         out["gait"] = raw["gait"]
+    # The subject's translation track, one [dx,dy] per frame in torso-scale units. Passed
+    # through for the same reason `gait` is: this function rebuilds `out` from a fixed key
+    # list, so anything not named here is dropped without a warning. `root` is the channel
+    # the hip anchoring subtracts (see pose_server._normalize_clip), and it is what a body
+    # sway or a hop lives in — silently losing it is how a rig ends up bobbing on the spot.
+    if isinstance(raw.get("root"), list):
+        out["root"] = raw["root"]
+    if isinstance(raw.get("root_travel"), dict):
+        out["root_travel"] = raw["root_travel"]
     if raw.get("confidence_of") in CONFIDENCE_MEANINGS:
         out["confidence_of"] = raw["confidence_of"]
     frames = raw.get("frames") if isinstance(raw.get("frames"), list) else []

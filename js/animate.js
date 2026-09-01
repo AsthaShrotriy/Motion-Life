@@ -179,6 +179,71 @@ const LIMB_RETARGET_ROLES = /^(leg|shin)-/;  // what 'legs' covers
  * 64 is within 0.35deg on the worst of them — and it runs once per selection, not per frame. */
 const LIMB_TIP_SAMPLES = 64;
 
+/*
+ * ── BODY CHANNEL — the whole-figure motion the limb rig alone cannot carry ────────────────
+ *
+ * WHY THIS EXISTS. A figure driven by _applyLimbs rotates its arms and legs about their
+ * joints and nothing else, so a subject who sways across the floor comes out marching on the
+ * spot. That is not a shortfall of the artwork or of the detector — it is the extraction
+ * deleting the channel. pose_server._normalize_clip anchors every frame at the hip midpoint
+ * (it has to; the arms otherwise rescale the torso), and the anchor subtracts the subject's
+ * TRANSLATION. Measured on assets/videos/dance-arms-overhead.mp4, the dancer's hip centre
+ * travels 49.9% of a torso length sideways and 15.6% vertically, and in the shipped swatch
+ * both of those come back as a range of 0.0000.
+ *
+ * So the fix is not a bigger gain on the limbs. The service now ships the anchor it used to
+ * throw away as `pose.root`, and this reads it.
+ *
+ * FOUR CHANNELS, THREE OF WHICH WERE ALWAYS AVAILABLE. Only translation is destroyed by
+ * anchoring. Tilt (shoulder to shoulder) and squash (shoulder to hip) are DIFFERENCES within
+ * a single frame, so the anchor cannot touch them and they have been sitting in every pose
+ * swatch on disk unread. Measured on the same clip:
+ *
+ *   channel          source                       measured range      as shipped
+ *   sway   (x)       pose.root[i][0]              49.9% of torso      was 0.0000
+ *   bob    (y)       pose.root[i][1]              15.6% of torso      was 0.0000
+ *   tilt             shoulder line angle          48.3deg             present, unread
+ *   squash           torso length / its median    11.6%               present, unread
+ *
+ * UNITS. `root` is in the same normalized box as `frames`, and _normalize_clip fits the
+ * subject's whole extent into that box — so one unit is the subject's own height. Multiplying
+ * by the artwork figure's bbox height maps the sway onto a figure of any size, which is why
+ * the gains below are all 1.0: at gain 1 the drawing sways as far, relative to its own body,
+ * as the person did. `intensity` scales this exactly as it scales a limb swing.
+ */
+const BODY_SWAY_GAIN = 1.0;
+const BODY_BOB_GAIN = 1.0;
+/* Tilt is taken at less than life because a drawn figure is one rigid silhouette: the dancer's
+ * 48.3deg of shoulder roll is spread across a real spine, while here it pivots the entire body
+ * as a board. Half reads as a lean; full reads as falling over. Capped as well as scaled, for
+ * the same reason LIMB_DEG_MAX exists — one bad frame must not lay the figure flat. */
+const BODY_TILT_GAIN = 0.5;
+const BODY_TILT_MAX = 18;
+/* Squash is a NON-uniform scale, so it is the channel that actually deforms rather than
+ * moves. Held well under the measured 11.6% because scaling flat artwork stretches the ink
+ * itself, not just its outline — past about a tenth the strokes visibly thin out. */
+const BODY_SQUASH_GAIN = 0.6;
+const BODY_SQUASH_MAX = 0.10;
+/*
+ * JUMP. The vertical channel, on its own and amplified.
+ *
+ * Be clear about what is and is not extracted here. The dancer in the reference clip never
+ * leaves the ground — measured, 0 of 117 frames have both ankles off their floor — so her
+ * "jump" is a 15.6%-of-torso bounce, which on a 250px figure is about 8px and reads as
+ * nothing. This gain is AUTHORED. What comes from the video is the timing, the shape and the
+ * number of hops; the height does not. Anything that reports this as extracted height is
+ * lying, and the inspector labels it `jump (height x6)` for that reason.
+ *
+ * 6 is where the arc stops looking like a bounce and starts looking like a hop, on a figure
+ * whose own height sets the scale — 0.0321 box units x 6 x figure height is a rise of ~19% of
+ * the figure, against a real standing jump of roughly 25-30%.
+ */
+const BODY_JUMP_GAIN = 6.0;
+/* Squash coupled to height, opposed in sign: compressed at the bottom of the arc, stretched
+ * at the top. This is what actually reads as a jump — anticipation and landing carry it far
+ * more than altitude does, which is why the gain above can stay as low as it is. */
+const BODY_JUMP_SQUASH = 0.08;
+
 /* Shortest-arc normalisation to -180..180, sign preserved. */
 const deg180 = (d) => ((d + 180) % 360 + 360) % 360 - 180;
 
@@ -1931,9 +1996,140 @@ class Animator {
       ops.push(rot(g));
       g.el.setAttribute('transform', `${g.neutral ? g.neutral + ' ' : ''}${ops.join(' ')}`);
     }
-    // The limbs carry the whole motion; the region itself must not also drift, or a
-    // route's translate would be competing with a second one written here.
-    wrap.setAttribute('transform', '');
+    // The limbs carry the JOINT motion; the figure's own translation, lean and squash go on
+    // the wrap, which is the one place they can be composed without being counted twice —
+    // every limb is a descendant, so it rides the body exactly as a real limb does.
+    // _bodyTransform returns '' unless the swatch or the artwork opted in (see the gate
+    // there), and this then clears the attribute exactly as it always did.
+    wrap.setAttribute('transform', this._bodyTransform(s, motion, t, intensity));
+  }
+
+  /*
+   * The body channel for this frame: sway, bob, lean and squash as ONE transform string.
+   *
+   * Returns '' whenever there is nothing to say — no pose, mode 'off', or a swatch predating
+   * `pose.root` — and _applyLimbs then clears the wrap as before.
+   *
+   * Mode comes from data-body on the artwork, falling back to what the clip measured:
+   * 'jump' when the capture's vertical dominates its horizontal, else 'dance'. That is a
+   * measurement rather than a name match, so an object called anything at all gets the mode
+   * its driving clip earns. See the BODY_* constants for what each channel is worth.
+   */
+  _bodyTransform(s, motion, t, intensity) {
+    const wrap = s.wrap;
+    const pose = this._poseFor(motion);
+    if (!pose) return '';
+    const declared = (wrap.dataset && wrap.dataset.body) || '';
+    if (declared === 'off') return '';
+    /*
+     * OPTING IN, so that nothing already verified changes under it.
+     *
+     * Tilt and squash need no new extraction — they survive the hip anchoring and have been
+     * present in every pose swatch ever written. That is exactly why this gate exists: were
+     * the channel simply always on, every figure shipped before today would silently start
+     * leaning and squashing, and the reference boy and girl were measured without it.
+     *
+     * So the body channel runs when the swatch carries `root` — the marker of an extraction
+     * that kept the translation — or when the artwork asks for it by name. An older swatch
+     * with no data-body animates byte for byte as it did before.
+     */
+    if (!Array.isArray(pose.root) && !(declared === 'dance' || declared === 'jump')) return '';
+
+    if (!s._body || s._bodyMotion !== motion.id || s._bodyMode !== declared) {
+      const frames = pose.frames.filter(Boolean);
+      const root = Array.isArray(pose.root) ? pose.root : null;
+      const jn = {}; (pose.joints || []).forEach((n, i) => jn[n] = i);
+      const mid = (f, a, b) => {
+        const p = f[jn[a]], q = f[jn[b]];
+        return (p && q) ? [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, Math.min(p[2], q[2])] : null;
+      };
+
+      // Tilt and squash survive the hip anchoring, so they come from `frames` and are
+      // available on every swatch ever shipped. Tilt is folded to +-90: a shoulder line is a
+      // line, so 179deg and -1deg are the same lean and only a fold keeps the track
+      // continuous instead of flipping 358deg whenever the subject squares up to the camera.
+      const tilt = [], torso = [];
+      for (const f of frames) {
+        const sh = mid(f, 'l_sho', 'r_sho'), hp = mid(f, 'l_hip', 'r_hip');
+        const ls = f[jn['l_sho']], rs = f[jn['r_sho']];
+        if (ls && rs && Math.min(ls[2], rs[2]) >= LIMB_VIS_OK) {
+          const a = Math.atan2(rs[1] - ls[1], rs[0] - ls[0]) * 180 / Math.PI;
+          tilt.push(((a + 90) % 180 + 180) % 180 - 90);
+        } else tilt.push(null);
+        torso.push((sh && hp && Math.min(sh[2], hp[2]) >= LIMB_VIS_OK)
+          ? Math.hypot(sh[0] - hp[0], sh[1] - hp[1]) : null);
+      }
+      const med = (v) => {
+        const g = v.filter(x => x != null).sort((a, b) => a - b);
+        return g.length ? g[Math.floor(g.length / 2)] : 0;
+      };
+      const t0 = med(torso);
+      // Tilt about its own median, not about zero: a subject filmed slightly off-square has a
+      // standing lean, and treating that as motion would hold the drawing permanently askew.
+      const tiltMid = med(tilt);
+      const hold = (v, fb) => {                 // carry the last believed value across gates
+        let last = fb; return v.map(x => (x == null ? last : (last = x)));
+      };
+      const tiltTrack = hold(tilt.map(x => x == null ? null : x - tiltMid), 0);
+      const squashTrack = hold(torso.map(x => (x == null || !t0) ? null : x / t0 - 1), 0);
+      const sway = root ? root.map(r => (r ? r[0] : 0)) : null;
+      const bob = root ? root.map(r => (r ? r[1] : 0)) : null;
+
+      // Which mode the CLIP earns, when the artwork has not declared one. A hop is vertical:
+      // its bob outruns its sway. The dance measures 0.1408 x against 0.0321 y, so it fails
+      // this and is a dance, which is what it is.
+      const rangeOf = (v) => (v && v.length) ? Math.max(...v) - Math.min(...v) : 0;
+      const auto = (rangeOf(bob) > rangeOf(sway)) ? 'jump' : 'dance';
+      const mode = (declared === 'dance' || declared === 'jump') ? declared : auto;
+
+      // The figure's own size sets the scale, and its base is what it pivots and stands on:
+      // a body leans and lands about its feet, not about its middle. Read once — getBBox is
+      // measured before any body transform is written, so it is the untransformed art.
+      let bb = null; try { bb = wrap.getBBox(); } catch (_) { bb = null; }
+      const h = (bb && bb.height) || 0;
+      s._body = {
+        mode, fps: pose.fps || 15, n: (sway || tiltTrack).length,
+        sway, bob, tilt: tiltTrack, squash: squashTrack, h,
+        bx: bb ? bb.x + bb.width / 2 : 0, by: bb ? bb.y + bb.height : 0,
+        // Whether the translation channels are real or absent, so the inspector can say
+        // "sway unavailable (swatch predates pose.root)" instead of showing a silent zero.
+        hasRoot: !!root,
+      };
+      s._bodyMotion = motion.id;
+      s._bodyMode = declared;
+    }
+
+    const B = s._body;
+    if (!B.n || !B.h) return '';
+    const { i0, f: ft } = framePos(t, B.fps, B.n);
+    const at = (track) => {
+      if (!track) return 0;
+      const a = track[i0] || 0, b = track[(i0 + 1) % B.n] || 0;
+      return a + (b - a) * ft;
+    };
+    const clamp = (v, m) => Math.max(-m, Math.min(m, v));
+
+    let dx = 0, dy = 0, rot = 0, sx = 1, sy = 1;
+    if (B.mode === 'jump') {
+      // Vertical only. Screen y grows downward, so a NEGATIVE dy is a rise, and the squash is
+      // opposed to it: tallest at the top of the arc, flattest at the bottom.
+      const up = -at(B.bob) * B.h * BODY_JUMP_GAIN * intensity;
+      dy = up;
+      const k = clamp((up / B.h) * (BODY_JUMP_SQUASH / 0.05), BODY_JUMP_SQUASH);
+      sy = 1 + k; sx = 1 - k;
+    } else {
+      dx = at(B.sway) * B.h * BODY_SWAY_GAIN * intensity;
+      dy = at(B.bob) * B.h * BODY_BOB_GAIN * intensity;
+      rot = clamp(at(B.tilt) * BODY_TILT_GAIN * intensity, BODY_TILT_MAX);
+      const k = clamp(at(B.squash) * BODY_SQUASH_GAIN * intensity, BODY_SQUASH_MAX);
+      sy = 1 + k; sx = 1 - k;                  // volume-ish: widen as it shortens
+    }
+
+    // Right to left: move to the base, lean and squash there, come back, then translate.
+    const p = (v) => v.toFixed(2);
+    return `translate(${p(dx)} ${p(dy)}) translate(${p(B.bx)} ${p(B.by)}) `
+         + `rotate(${p(rot)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) `
+         + `translate(${p(-B.bx)} ${p(-B.by)})`;
   }
 
   _applyWings(s, motion, t, intensity) {

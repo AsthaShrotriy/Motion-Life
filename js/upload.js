@@ -162,6 +162,13 @@ window.handleMotionUpload = async (e) => {
       // a false all-clear.
       const gait = pose.gait && typeof pose.gait === 'object' ? pose.gait : null;
       const noGait = gait && gait.walkable === false ? gait : null;
+      // The frames the rig will actually replay, and the root track kept IN STEP with them.
+      // `filter(Boolean)` renumbers the frames, so root has to be filtered by the same
+      // predicate or frame i is driven by the translation of some other frame — a body
+      // sliding out of time with its own limbs. Zipped rather than filtered separately.
+      const rootIn = Array.isArray(pose.root) ? pose.root : null;
+      const frames = [], root = [];
+      pose.frames.forEach((f, i) => { if (f) { frames.push(f); if (rootIn) root.push(rootIn[i] || [0, 0]); } });
       const motion = {
         id: 'char-' + Date.now(), name,
         desc: `Character motion · MediaPipe (${pose.detected}/${pose.total} frames)`
@@ -171,8 +178,16 @@ window.handleMotionUpload = async (e) => {
         // stride_axis, which tells the rig whether this clip's stride is across the picture
         // or along the camera axis. Dropping it here silently sent every head-on walk down
         // the picture-plane path, where its legs swing 4deg instead of 52deg.
-        pose: { joints: pose.joints, fps: pose.fps, frames: pose.frames.filter(Boolean),
-                gait },
+        //
+        // `root` travels for the same reason, and it is the same bug twice: this object is
+        // rebuilt from a fixed key list, so a channel not named here is dropped in silence.
+        // root is the subject's TRANSLATION — the sway, the bob, the hop — which the hip
+        // anchoring subtracts out of `frames` (see pose_server._normalize_clip). Without it
+        // an uploaded clip animates limbs on a figure that never leaves its mark, which is
+        // exactly the "not prominent" it was reported as. Omitted, not zeroed, when the
+        // response has no root: absent means an older service, not a subject standing still.
+        pose: Object.assign({ joints: pose.joints, fps: pose.fps, frames, gait },
+                            rootIn ? { root, root_travel: pose.root_travel } : null),
         params: { frequency: 1, amplitude: 0.2, direction: 0, turbulence: 0, damping: 0, phaseSpread: 0 },
         videoUrl, fromUpload: true, engine: 'mediapipe',
         swatches: sw && sw.kind === 'skeleton' ? [sw] : [],

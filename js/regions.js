@@ -302,9 +302,14 @@ class SelectionManager {
     // fell back to the 'legs' default, and both legs were retargeted off centre by about
     // -35deg and +27deg while the arms (which that mode leaves alone) were correct. Called
     // before `el` is moved into the wrap, so `el` is still in the original tree here.
-    const src = el.closest ? el.closest('[data-retarget]') : null;
-    const v = (src && src.getAttribute('data-retarget')) || el.getAttribute('data-retarget');
-    if (v) wrap.setAttribute('data-retarget', v);
+    // data-body rides along for exactly the same reason: it is a figure-level declaration
+    // (which body channel drives the whole object — see the BODY_* notes in js/animate.js),
+    // read off the wrap at animate time, so a wrap that does not inherit it silently loses it.
+    for (const attr of ['data-retarget', 'data-body']) {
+      const src = el.closest ? el.closest(`[${attr}]`) : null;
+      const v = (src && src.getAttribute(attr)) || el.getAttribute(attr);
+      if (v) wrap.setAttribute(attr, v);
+    }
   }
 
   // ---- wrap each selectable unit so we have a stable animate target ----
@@ -409,6 +414,7 @@ class SelectionManager {
         wrap.setAttribute('class', 'ms-wrap');
         wrap.setAttribute('data-ms-name', el.id || el.getAttribute('data-name')
           || (el.tagName.toLowerCase() === 'text' ? 'text' : 'element') + ' ' + (this._svg.querySelectorAll('.ms-wrap').length + 1));
+        this._carryRigAttrs(el, wrap);
         el.parentNode.insertBefore(wrap, el);
         wrap.appendChild(el);
         return wrap;
@@ -420,6 +426,7 @@ class SelectionManager {
     const n = this._svg ? this._svg.querySelectorAll('.ms-wrap').length + 1 : 1;
     wrap.setAttribute('data-ms-name', el.id || el.getAttribute('data-name')
       || (el.tagName.toLowerCase() === 'text' ? 'text' : 'element') + ' ' + n);
+    this._carryRigAttrs(el, wrap);
     el.parentNode.insertBefore(wrap, el);
     wrap.appendChild(el);
     return wrap;
