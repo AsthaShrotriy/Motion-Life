@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MotionLife</title>
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<script>(function(){var t=localStorage.getItem('ml-theme')||'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=105">
+</head>
+<body>
+<header>
+  <div class="header-left">
+    <img src="img/logo.svg" class="brand-logo" alt="MotionLife logo">
+    <h1>MotionLife</h1>
+    <span class="tagline">Select an object. Apply a motion. Bring your art to life.</span>
+  </div>
+  <div class="header-right">
+    <div class="download-menu" id="download-menu">
+      <button id="btn-download" class="subtle-btn" aria-haspopup="true" aria-expanded="false">Download ▾</button>
+      <div class="download-dropdown" id="download-dropdown" hidden>
+        <button class="download-option" data-format="svg">Animated SVG</button>
+        <button class="download-option" data-format="mp4">Video (MP4)</button>
+      </div>
+    </div>
+    <button id="btn-upload-art" class="subtle-btn">Upload artwork</button>
+    <input type="file" id="art-input" accept="image/*,.svg" hidden>
+  </div>
+</header>
+
+<main>
+  <!-- ===== LEFT: MOTION LIBRARY + REGION INSPECTOR ===== -->
+  <aside id="library-panel">
+    <div class="panel-section" id="videos-section">
+      <h2>Videos</h2>
+      <div id="video-list" class="chip-grid"></div>
+      <div id="videos-empty" class="videos-empty">
+        <div class="ve-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+            <rect x="2" y="6" width="13" height="12" rx="2"/><path d="M15 10l6-3v10l-6-3z"/>
+          </svg>
+        </div>
+        <p class="ve-text">Add a video to capture its real-world motion — leaves falling, a flag waving, water rippling — and bring your artwork to life.</p>
+      </div>
+      <button id="btn-upload-motion" class="upload-btn upload-btn-primary">+ Upload Video</button>
+      <input type="file" id="motion-input" accept="video/*" hidden>
+      <div id="upload-status"></div>
+    </div>
+
+    <div class="panel-section" id="library-section">
+      <h2>Motion Presets</h2>
+      <div id="motion-list" class="chip-grid"></div>
+    </div>
+  </aside>
+
+  <!-- ===== CENTER: ARTWORK CANVAS ===== -->
+  <section id="canvas-section">
+    <div id="canvas-wrap">
+      <div id="artwork-container"></div>
+      <canvas id="selection-overlay"></canvas>
+    </div>
+    <div class="toolbar">
+      <span id="mode-hint" class="tool-label">SVG mode — click objects to select</span>
+      <span id="tool-controls" style="display:none; align-items:center; gap:8px;">
+        <span class="sep"></span>
+        <button id="btn-tool-rect" class="tool-btn active">□ Draw rectangle</button>
+      </span>
+      <span class="sep"></span>
+      <span class="tool-label">Regions:</span>
+      <div id="region-chips"></div>
+    </div>
+  </section>
+
+  <!-- ===== RIGHT: PROPERTIES + LAYERS (collapsible) ===== -->
+  <aside id="right-panel">
+    <button id="right-collapse" class="panel-collapse" title="Collapse panel" aria-label="Collapse panel">›</button>
+    <div class="right-inner">
+      <div class="panel-section" id="inspector-section" hidden>
+        <h2>Properties</h2>
+        <div id="inspector-content" hidden>
+          <div class="insp-row">
+            <label>Region</label>
+            <input type="text" id="insp-name">
+          </div>
+          <div class="insp-row">
+            <label class="tool-toggle" title="Click a selected group again to break it into individually-selectable parts">
+              <input type="checkbox" id="chk-individual"> Individual selection
+            </label>
+          </div>
+          <div class="insp-row">
+            <label>Assigned Motion</label>
+            <div id="insp-motion-name" class="motion-badge">None</div>
+          </div>
+          <div class="insp-row">
+            <label>Speed <span id="insp-speed-val">1.0x</span></label>
+            <input type="range" id="insp-speed" min="0.1" max="3" step="0.1" value="1">
+          </div>
+          <div class="insp-row">
+            <label>Intensity <span id="insp-intensity-val">100%</span></label>
+            <input type="range" id="insp-intensity" min="0" max="2" step="0.05" value="1">
+          </div>
+          <div class="insp-row" id="insp-retarget-row" hidden>
+            <label>Rest pose</label>
+            <select id="insp-retarget">
+              <option value="legs">Match the capture (legs only)</option>
+              <option value="off">Keep the pose as drawn</option>
+              <option value="all">Match the capture (whole figure — can tear a very different pose)</option>
+            </select>
+            <p class="insp-hint" id="insp-retarget-hint"></p>
+          </div>
+          <div class="insp-row">
+            <label>Travel route <span id="insp-route-val">none</span></label>
+            <div class="insp-actions">
+              <button id="btn-draw-route">Draw route</button>
+              <button id="btn-loop-route" class="toggle-btn">Loop travel</button>
+              <button id="btn-clear-route">Clear route</button>
+            </div>
+            <p class="insp-hint" id="insp-route-hint" hidden></p>
+          </div>
+          <div class="insp-row" id="insp-route-dur-row" hidden>
+            <label>Route time <span id="insp-route-dur-val">4.0s</span></label>
+            <input type="range" id="insp-route-dur" min="0.5" max="12" step="0.5" value="4">
+          </div>
+          <div class="insp-actions">
+            <button id="btn-remove-motion">Remove motion</button>
+            <button id="btn-delete-region" class="danger">Delete region</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-section" id="judge-section" hidden>
+        <h2>Motion judge</h2>
+        <p class="judge-hint">Shows the animated result back to the VLM and tunes the dials
+          toward what it says. Costs a vision call per pass, so it only runs when you press it.</p>
+        <div class="insp-actions">
+          <button id="btn-judge">Judge &amp; tune</button>
+          <button id="btn-judge-revert" hidden>Undo tuning</button>
+        </div>
+        <div id="judge-out"></div>
+      </div>
+
+      <div class="panel-section" id="layers-section" hidden>
+        <h2>Layers</h2>
+        <div class="insp-actions">
+          <button id="btn-autolabel">Auto-label layers</button>
+        </div>
+        <div id="autolabel-out"></div>
+        <div id="layers-list"></div>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <div id="status">Draw a rectangle around a scene object to start.</div>
+</footer>
+
+<button id="theme-toggle" class="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">☀️</button>
+
+<script src="js/flow.js?v=105"></script>
+<script src="js/distill.js?v=105"></script>
+<script src="js/motions.js?v=105"></script>
+<script src="js/scenery.js?v=105"></script>
+<script src="js/poster.js?v=105"></script>
+<script src="js/regions.js?v=105"></script>
+<script src="js/motionfields.js?v=105"></script>
+<script src="js/animate.js?v=105"></script>
+<script src="js/export.js?v=105"></script>
+<script src="js/videoexport.js?v=105"></script>
+<script src="js/extractviz.js?v=105"></script>
+<script src="js/multiextract.js?v=105"></script>
+<script src="js/multipick.js?v=105"></script>
+<script src="js/skeletonviz.js?v=105"></script>
+<script src="js/capture.js?v=105"></script>
+<script src="js/autolabel.js?v=105"></script>
+<script src="js/autorig.js?v=105"></script>
+<script src="js/judge.js?v=105"></script>
+<script src="js/upload.js?v=105"></script>
+<script src="js/main.js?v=105"></script>
+</body>
+</html>

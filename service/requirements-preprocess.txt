@@ -1,0 +1,4 @@
+# Preprocess service (Step 2) — camera motion + object mask. OpenCV only, no torch,
+# no model downloads. routervenv already satisfies this (opencv-python + numpy).
+opencv-python
+numpy

@@ -1,0 +1,79 @@
+<svg viewBox="0 0 900 560" xmlns="http://www.w3.org/2000/svg" width="900" height="560">
+  <defs>
+    <linearGradient id="ml-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bfe3ff"/><stop offset="1" stop-color="#eaf6ff"/>
+    </linearGradient>
+    <linearGradient id="ml-water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4aa3d6"/><stop offset="1" stop-color="#2f6f9e"/>
+    </linearGradient>
+    <linearGradient id="ml-grass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#cfe6a8"/><stop offset="1" stop-color="#a9d17c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- static backdrop (id-only = not selectable) -->
+  <rect id="ml-sky" width="900" height="320" fill="url(#ml-sky)"/>
+  <polygon id="ml-hillA" points="0,320 260,200 520,320" fill="#9bb0a5"/>
+  <polygon id="ml-hillB" points="360,320 640,180 900,320" fill="#8aa398"/>
+
+  <!-- ===== RIVER (name-keyed: ripple) ===== -->
+  <g class="layer" data-name="River">
+    <path d="M0 320 q75 -12 150 0 q75 12 150 0 q75 -12 150 0 q75 12 150 0 q75 -12 150 0
+             L900 430 L0 430 Z" fill="url(#ml-water)"/>
+  </g>
+
+  <!-- grassy foreground the duck walks on (static) -->
+  <rect id="ml-grass" y="418" width="900" height="142" fill="url(#ml-grass)"/>
+
+  <!-- ===== CLOUDS (name-keyed: drift) ===== -->
+  <g class="layer" data-name="Clouds">
+    <g fill="#ffffff">
+      <ellipse cx="150" cy="80" rx="46" ry="24"/><ellipse cx="192" cy="70" rx="34" ry="22"/><ellipse cx="112" cy="74" rx="30" ry="18"/>
+      <ellipse cx="470" cy="60" rx="40" ry="22"/><ellipse cx="505" cy="54" rx="28" ry="18"/>
+    </g>
+  </g>
+
+  <!-- ===== BIRDS (name-keyed: wing flap + drift) ===== -->
+  <g class="layer" data-name="Birds">
+    <path d="M320 120 q14 -13 28 0 q14 -13 28 0" fill="none" stroke="#333" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M380 100 q12 -11 24 0 q12 -11 24 0" fill="none" stroke="#333" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- ===== BOAT (name-keyed: bob/rock — NOT the tracker model) ===== -->
+  <g class="layer" data-name="Boat">
+    <path d="M600 372 l86 0 l-14 26 l-58 0 Z" fill="#c8792e"/>
+    <rect x="638" y="336" width="4" height="36" fill="#7a5230"/>
+    <path d="M642 338 l34 22 l-34 6 Z" fill="#ffffff"/>
+  </g>
+
+  <!-- ===== FLAG (Cloth mode -> RAFT-driven wave) ===== -->
+  <g class="layer" data-name="Flag">
+    <rect x="690" y="250" width="6" height="180" fill="#6b6b6b"/>
+    <path d="M696 256 q34 -12 68 0 q34 12 68 0 l0 52 q-34 12 -68 0 q-34 -12 -68 0 Z" fill="#e23b3b"/>
+  </g>
+
+  <!-- ===== RIGGED DUCK (character motion via MediaPipe) =====
+       Local frame centred on body (0,0); the group transform places + scales it.
+       The animator repositions the data-role parts each frame. -->
+  <g class="layer" data-name="Duck" data-motion-mode="character" data-leg="150"
+     transform="translate(250 300) scale(0.72)">
+    <polyline data-role="leg-far"  points="-14,52 -14,120 -14,175" fill="none"
+              stroke="#e8892b" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>
+    <ellipse  data-role="foot-far" cx="-6" cy="177" rx="16" ry="6" fill="#e8892b" opacity="0.75"/>
+    <polyline data-role="leg-near" points="14,52 14,120 14,175" fill="none"
+              stroke="#f0a030" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse  data-role="foot-near" cx="22" cy="177" rx="18" ry="7" fill="#f0a030"/>
+    <g data-role="body">
+      <ellipse cx="0" cy="0" rx="96" ry="70" fill="#ffd23f"/>
+      <path d="M -96 -6 q -46 -6 -70 -34 q 44 8 70 6 Z" fill="#f2c02e"/>
+      <ellipse cx="22" cy="6" rx="52" ry="40" fill="#f7c62f"/>
+      <path d="M 44 -40 q 42 -18 60 -70 q 6 40 -14 78 Z" fill="#ffd23f"/>
+    </g>
+    <g data-role="head" transform="translate(96 -64)">
+      <circle cx="0" cy="0" r="38" fill="#ffd23f"/>
+      <path d="M 30 -4 l 46 8 l -46 14 Z" fill="#f28c1e"/>
+      <circle cx="-6" cy="-10" r="6" fill="#1a1a2a"/>
+      <circle cx="-8" cy="-12" r="2" fill="#fff"/>
+    </g>
+  </g>
+</svg>

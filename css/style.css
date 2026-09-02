@@ -1,0 +1,779 @@
+/* ---- DARK theme (default) ---- */
+:root {
+  --bg: #1e1e1e;
+  --panel: #2a2a2a;
+  --panel-edge: #3d3d3d;
+  --surface: #333333;
+  --text: #eaeaea;
+  --muted: #9e9e9e;
+  --accent: #6e5cff;
+  --accent-2: #ff5c8a;
+  --good: #3ddc84;
+  --warn: #ffb347;
+  --radius: 10px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.35), 0 1px 3px rgba(0,0,0,0.45);
+  --shadow-md: 0 6px 28px rgba(0,0,0,0.5);
+  --btn-hover: #3a3a3a;
+  --btn-hover-edge: #4d4d4d;
+  --stage-bg: #181818;
+  --chip-bg: #2e2e2e;
+  --chip-name: #dedede;
+}
+
+/* ---- LIGHT theme (opt-in) ---- */
+:root[data-theme="light"] {
+  --bg: #f5f5f5;
+  --panel: #ffffff;
+  --panel-edge: #d6d6d6;
+  --surface: #efefef;
+  --text: #2b2b2b;
+  --muted: #767676;
+  --good: #1faa63;
+  --warn: #d98a1f;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.07);
+  --shadow-md: 0 4px 24px rgba(0,0,0,0.09);
+  --btn-hover: #ebebeb;
+  --btn-hover-edge: #cfcfcf;
+  --stage-bg: #e2e2e2;
+  --chip-bg: #242424;
+  --chip-name: #dedede;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Source Sans 3", "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---- header ---- */
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--panel-edge);
+  background: var(--panel);
+  z-index: 20;
+}
+.header-left { display: flex; align-items: center; gap: 12px; }
+.brand-logo { width: 30px; height: 30px; display: block; flex-shrink: 0; }
+h1 {
+  font-size: 20px; font-weight: 700;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.tagline { color: var(--muted); font-size: 12.5px; }
+.header-right { display: flex; gap: 8px; }
+
+/* ---- buttons ---- */
+button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--panel-edge);
+  border-radius: 7px;
+  padding: 7px 13px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: 0.15s;
+}
+button { box-shadow: var(--shadow-sm); }
+button:hover { background: var(--btn-hover); border-color: var(--btn-hover-edge); }
+button:disabled { opacity: 0.4; cursor: default; }
+.subtle-btn { background: transparent; border-color: var(--panel-edge); color: var(--muted); }
+
+/* ---- Download dropdown ---- */
+.download-menu { position: relative; display: inline-block; }
+.download-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 5px;
+  gap: 3px;
+  background: var(--surface);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.download-dropdown[hidden] { display: none; }
+.download-option {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.download-option:hover { background: var(--btn-hover); }
+.download-option:disabled { opacity: 0.4; cursor: default; }
+/* an action button that latches on/off (Loop travel). Same accent-border language as
+   .region-chip.active, so "engaged" reads the same wherever it appears. */
+.toggle-btn.on { border-color: var(--accent); background: rgba(110,92,255,0.10); color: var(--accent); }
+.play-btn { background: var(--accent); border-color: transparent; font-weight: 600; }
+.play-btn:hover { background: #7d6fff; }
+.play-btn.playing { background: var(--accent-2); }
+.upload-btn {
+  width: 100%; margin-top: 10px;
+  border: 1px dashed var(--panel-edge); background: transparent; color: var(--muted);
+  padding: 10px; font-size: 12.5px;
+}
+.upload-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* highlighted upload button (Videos section) */
+.upload-btn-primary {
+  border: 1px solid var(--accent);
+  background: rgba(110,92,255,0.12);
+  color: var(--accent);
+  font-weight: 600;
+}
+.upload-btn-primary:hover { background: rgba(110,92,255,0.22); border-color: var(--accent); color: var(--accent); }
+/* Videos empty state — shown until the first clip is uploaded */
+.videos-empty { text-align: center; padding: 6px 6px 2px; color: var(--muted); }
+.videos-empty .ve-icon { color: var(--accent); opacity: 0.85; margin-bottom: 6px; }
+.videos-empty .ve-text { font-size: 12px; line-height: 1.5; }
+#videos-section.has-videos .videos-empty { display: none; }
+.danger { color: var(--accent-2); border-color: var(--accent-2); }
+.danger:hover { background: rgba(255,92,138,0.1); }
+
+/* ---- main layout ---- */
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 280px 1fr 300px;
+  gap: 0;
+  min-height: 0;
+}
+main.right-collapsed { grid-template-columns: 280px 1fr 40px; }
+
+/* ---- library panel ---- */
+#library-panel {
+  background: var(--panel);
+  border-right: 1px solid var(--panel-edge);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+/* two stacked sections: Videos, Motion Presets */
+#videos-section, #library-section {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px 14px 0;
+}
+#videos-section { flex: 0 0 auto; }                        /* compact, at the top */
+#library-section { flex: 1 1 0; }                          /* Presets: main scroller */
+#library-section { border-top: 1px solid var(--panel-edge); }
+/* static headings; only the grids scroll */
+#videos-section > h2, #library-section > h2 { flex: 0 0 auto; }
+#video-list { max-height: 40vh; overflow-y: auto; overflow-x: hidden; }
+#motion-list, #video-list { min-height: 0; padding-bottom: 14px; }
+#motion-list { flex: 1 1 0; overflow-y: auto; }
+/* always-visible slim scrollbar for the library's scrollable lists (macOS overlay
+   scrollbars otherwise stay hidden until you scroll). NOTE: no `scrollbar-width` here —
+   setting it makes Chromium ignore ::-webkit-scrollbar and fall back to an overlay bar. */
+#video-list::-webkit-scrollbar, #motion-list::-webkit-scrollbar { width: 9px; }
+#video-list::-webkit-scrollbar-track, #motion-list::-webkit-scrollbar-track { background: transparent; }
+#video-list::-webkit-scrollbar-thumb, #motion-list::-webkit-scrollbar-thumb {
+  background: var(--panel-edge); border-radius: 5px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+#video-list::-webkit-scrollbar-thumb:hover, #motion-list::-webkit-scrollbar-thumb:hover {
+  background: var(--muted); background-clip: padding-box;
+}
+#videos-section > .upload-btn, #videos-section > #upload-status { flex: 0 0 auto; }
+/* motion swatches: 2 per row → larger swatches */
+#motion-list {
+  grid-template-columns: repeat(2, 1fr);
+  grid-auto-rows: min-content;
+  align-items: start; justify-content: stretch;
+}
+
+/* uploaded clips: stacked horizontal rows, each with actions + a motions dropdown */
+#video-list { display: flex; flex-direction: column; gap: 8px; }
+.video-row {
+  flex: 0 0 auto;          /* don't shrink to fit — overflow so #video-list scrolls */
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.video-row-main { display: flex; align-items: flex-start; gap: 10px; padding: 8px; }
+/* left: a big video with its name below it */
+.video-preview { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.video-thumb {
+  width: 100%; aspect-ratio: 16 / 10; flex: 0 0 auto;
+  border-radius: 6px; object-fit: cover; background: #000; display: block;
+}
+.video-meta { min-width: 0; }
+.video-name {
+  font-size: 12.5px; color: var(--text); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.video-sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+/* right: the three actions stacked vertically */
+.video-actions { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
+.vr-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border-radius: 6px; color: var(--muted);
+}
+.vr-btn:hover { color: var(--text); }
+.vr-btn.danger { color: var(--accent-2); border-color: transparent; }
+.vr-btn.danger:hover { background: rgba(255,92,138,0.12); }
+.vr-btn svg { transition: transform 0.15s; }
+.vr-btn.open svg { transform: rotate(180deg); }
+.video-motions {
+  padding: 8px; border-top: 1px solid var(--panel-edge);
+  grid-template-columns: repeat(2, 1fr);
+  grid-auto-rows: min-content;
+  align-items: start; justify-content: stretch;
+}
+/* .video-motions also carries .chip-grid (repeat(3,1fr)); the double-class selector
+   out-specifies it so the extracted-motion swatches sit 2 per row → larger */
+.video-motions.chip-grid { grid-template-columns: repeat(2, 1fr); }
+.video-motions[hidden] { display: none; }
+.video-motions-empty { font-size: 11.5px; color: var(--muted); grid-column: 1 / -1; }
+#library-panel h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
+
+/* ---- right panel (collapsible): Properties + Layers ---- */
+#right-panel {
+  position: relative;
+  background: var(--panel);
+  border-left: 1px solid var(--panel-edge);
+  min-height: 0;
+  overflow: hidden;
+}
+.panel-collapse {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 26px; height: 26px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; box-shadow: none;
+  color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.panel-collapse:hover { color: var(--text); background: transparent; border-color: transparent; }
+.right-inner { height: 100%; overflow-y: auto; }
+#right-panel .panel-section { padding: 14px; border-bottom: 1px solid var(--panel-edge); }
+#right-panel h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
+main.right-collapsed .right-inner { display: none; }
+main.right-collapsed #right-panel { overflow: visible; }
+
+/* ---- layers tree ---- */
+#layers-list { font-size: 12px; margin: 0 -6px; }
+.layers-empty { color: var(--muted); font-size: 12px; padding: 4px 8px; }
+.layer-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: 6px; cursor: pointer;
+  color: var(--text); white-space: nowrap;
+}
+.layer-row:hover { background: var(--surface); }
+.layer-row.active { background: rgba(110,92,255,0.16); color: var(--accent); }
+/* untagged container rows: not selectable — dim + no pointer so it reads as "click a child" */
+.layer-row.inert { cursor: default; }
+.layer-row.inert:hover { background: none; }
+.layer-row.inert .layer-name { opacity: 0.45; font-style: italic; }
+.layer-caret {
+  flex: 0 0 12px; text-align: center; font-size: 9px;
+  color: var(--muted); cursor: pointer; user-select: none;
+}
+.layer-eye {
+  flex: 0 0 16px; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); cursor: pointer;
+}
+.layer-eye:hover { color: var(--text); }
+.layer-eye.off { opacity: 0.3; }
+.layer-name { overflow: hidden; text-overflow: ellipsis; }
+/* (Step 10) what the VLM read off the artwork, beside the file's own layer name */
+.layer-class {
+  margin-left: auto; flex: 0 0 auto; font-size: 10px; letter-spacing: 0.2px;
+  padding: 1px 6px; border-radius: 8px; max-width: 46%;
+  overflow: hidden; text-overflow: ellipsis;
+  background: rgba(110,92,255,0.18); color: var(--accent);
+}
+.layer-class.static { background: var(--surface); color: var(--muted); }
+
+/* ---- left panel sections ---- */
+.panel-divider { height: 1px; background: var(--panel-edge); margin: 16px 0; }
+#inspector-empty p { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+
+/* ---- motion chips: Pantone-style particle swatches ---- */
+.chip-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-content: start; }
+.motion-chip {
+  cursor: grab;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--chip-bg);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.12s, box-shadow 0.15s;
+}
+.motion-chip:active { cursor: grabbing; }
+.motion-chip:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
+.motion-chip.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,92,255,0.25); }
+.motion-chip canvas { width: 100%; aspect-ratio: 1; display: block; }
+.chip-name {
+  font-size: 10px; font-weight: 600;
+  padding: 6px 7px;
+  color: var(--chip-name);
+  background: var(--chip-bg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---- scene tabs ---- */
+.scene-tabs {
+  display: flex; gap: 24px;
+  background: transparent;
+  border: none; border-radius: 0; padding: 0;
+}
+.scene-tab {
+  border: none; background: transparent; box-shadow: none;
+  color: var(--text); font-size: 15px; font-weight: 600;
+  padding: 6px 2px; border-radius: 0; cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.scene-tab:hover { color: var(--text); background: transparent; border-color: transparent; }
+.scene-tab.active { background: transparent; color: var(--text); border-bottom: 2px solid var(--text); }
+
+/* ---- extraction moment modal ---- */
+.extract-modal {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(10, 10, 10, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  animation: xm-in 0.25s ease;
+}
+.extract-modal.closing { opacity: 0; transition: opacity 0.25s; }
+@keyframes xm-in { from { opacity: 0; } }
+.extract-stage {
+  position: relative;
+  width: min(78vw, 900px);
+  aspect-ratio: 16/10;
+  border-radius: 14px; overflow: hidden;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+}
+.extract-stage video {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; filter: brightness(0.75);
+}
+.extract-stage canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+}
+.extract-readout {
+  position: absolute; top: 18px; left: 20px;
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 14px; color: #fff;
+  background: rgba(12, 12, 12, 0.55);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 10px; padding: 12px 16px;
+  backdrop-filter: blur(6px);
+  min-width: 190px;
+}
+.xr-row { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; }
+.xr-k { color: #9e9e9e; }
+.xr-v { color: #7cffc4; font-weight: 600; font-variant-numeric: tabular-nums; }
+.extract-skip {
+  position: absolute; bottom: 14px; right: 16px;
+  background: rgba(12,12,12,0.6); color: #d0d0d0;
+  border: 1px solid rgba(255,255,255,0.2); border-radius: 7px;
+  padding: 6px 13px; font-size: 12.5px; cursor: pointer;
+}
+.extract-skip:hover { color: #fff; }
+
+/* ---- extraction reveal (extends .extract-modal / .extract-stage) ---- */
+/* near-opaque backdrop so the app behind (esp. the white blank canvas) doesn't
+   bleed through as a grey box */
+.mx-modal { background: rgba(10, 10, 10, 0.96); }
+/* layout: Skip on top, then [ video-stage | swatch-column ] side by side so the
+   extracted-motion swatches sit BESIDE the video, never overlapping it. The shell
+   is a card that HUGS its content, so there's no empty grey space around it. */
+.mx-shell {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  background: rgba(30, 30, 30, 0.98);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 16px; padding: 14px 16px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+}
+.mx-body { display: flex; gap: 14px; align-items: flex-start; }
+/* bigger video; the small swatch column needs less reserved room */
+.mx-modal .extract-stage { width: min(70vw, 860px, calc(96vw - 150px)); }
+.mx-modal .extract-skip { position: static; align-self: flex-start; }
+
+/* right column of extracted-motion swatches: an animated mini-canvas + caption per
+   motion, appearing one at a time as each field is extracted */
+.mx-swatches {
+  align-self: stretch; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px; width: 128px;
+}
+.mx-swatches-title {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #fff; opacity: 0.85; text-shadow: 0 1px 6px rgba(0,0,0,0.6); padding: 0 2px 2px;
+}
+.mx-swatch {
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px;
+  background: rgba(12, 12, 12, 0.6); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 8px; padding: 4px; backdrop-filter: blur(6px);
+  opacity: 0; transform: translateX(10px);
+  animation: mx-sw-in 0.4s ease forwards;
+}
+@keyframes mx-sw-in { to { opacity: 1; transform: none; } }
+.mx-swatch canvas {
+  width: 100%; aspect-ratio: 16 / 10; height: auto; display: block;
+  border-radius: 5px; background: rgba(20, 20, 20, 0.7);
+}
+.mx-swatch-cap {
+  font-size: 9.5px; color: #eaeaea; text-align: center; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mx-swatch-cap .eng {
+  display: block; font-size: 8px; text-transform: uppercase; letter-spacing: 0.05em; color: #a9a9a9;
+}
+/* live progress pill (bottom-center) + spinner; Skip moves to the top-right so
+   the two never collide */
+.mx-status {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px; max-width: 72%;
+  background: rgba(12, 12, 12, 0.6); border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px; padding: 7px 14px; color: #eaeaea; font-size: 12.5px;
+  backdrop-filter: blur(6px);
+}
+.mx-status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-spin {
+  width: 13px; height: 13px; border-radius: 50%; flex: 0 0 auto;
+  border: 2px solid rgba(255,255,255,0.25); border-top-color: #fff;
+  animation: mx-spin 0.8s linear infinite;
+}
+@keyframes mx-spin { to { transform: rotate(360deg); } }
+.mx-status-done .mx-spin { display: none; }
+
+/* ---- multi-motion picker modal ---- */
+.multipick-modal {
+  position: fixed; inset: 0; z-index: 210;
+  background: rgba(10, 10, 10, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  animation: xm-in 0.25s ease;
+}
+.multipick-modal.closing { opacity: 0; transition: opacity 0.22s; }
+.mp-panel {
+  width: min(94vw, 1120px);
+  max-height: 90vh;
+  display: flex; flex-direction: column;
+  background: #232323;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+.mp-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 16px 22px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.mp-title { color: #fff; font-size: 15px; font-weight: 600; }
+.mp-sub { color: #9e9e9e; font-size: 12px; margin-top: 3px; }
+.mp-close {
+  background: transparent; border: 0; color: #9e9e9e;
+  font-size: 18px; cursor: pointer; padding: 4px 8px;
+}
+.mp-close:hover { color: #fff; }
+.mp-body {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 18px;
+  padding: 18px 22px;
+  min-height: 0;
+  overflow: hidden;
+}
+.mp-stage {
+  position: relative;
+  border-radius: 10px; overflow: hidden;
+  background: #000;
+  aspect-ratio: 16 / 10;
+  align-self: start;
+}
+.mp-stage video {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; filter: brightness(0.75);
+}
+.mp-stage canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+}
+.mp-cards {
+  display: flex; flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.mp-card {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 14px;
+  background: #2b2b2b;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-left: 3px solid var(--region-color, #7c6cff);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.mp-card:hover { background: #333333; }
+.mp-card.soloed {
+  background: #383838;
+  border-color: rgba(255,255,255,0.28);
+  border-left-color: var(--region-color);
+  box-shadow: 0 0 0 2px rgba(124, 108, 255, 0.15);
+}
+.mp-card.unselected {
+  opacity: 0.4;
+  border-left-color: rgba(255,255,255,0.15);
+}
+.mp-check {
+  display: flex; align-items: center; padding-top: 3px;
+  cursor: pointer;
+}
+.mp-check input { margin: 0; width: 16px; height: 16px; accent-color: var(--region-color); }
+.mp-swatch {
+  display: none;   /* keep the check native; color already on left border */
+}
+.mp-fields { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mp-name {
+  background: #1a1a1a;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  width: 100%;
+  min-width: 0;
+}
+.mp-name:focus { outline: none; border-color: var(--region-color); }
+.mp-params {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px; color: #9e9e9e;
+}
+.mp-params b { color: #d0d0d0; font-weight: 600; }
+.mp-actions {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 22px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  background: #1a1a1a;
+}
+.mp-hint { color: #7a7a7a; font-size: 12px; }
+.mp-actions-right { display: flex; gap: 10px; }
+.mp-cancel, .mp-save {
+  padding: 8px 16px; border-radius: 7px; font-size: 13px;
+  border: 1px solid rgba(255,255,255,0.16);
+  cursor: pointer;
+}
+.mp-cancel { background: transparent; color: #d0d0d0; }
+.mp-cancel:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
+.mp-save {
+  background: var(--accent, #7c6cff); color: #fff; border-color: transparent;
+  font-weight: 600;
+}
+.mp-save:hover:not(:disabled) { filter: brightness(1.1); }
+.mp-save:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---- header center ---- */
+.header-center { flex: 1; display: flex; justify-content: center; }
+
+/* pre-line so a multi-line message (e.g. the "no walk cycle in this clip" measurement the
+   pose service returns) reads as its own line instead of running into the line above. */
+#upload-status { font-size: 11px; color: var(--muted); margin-top: 6px; white-space: pre-line; }
+
+/* ---- canvas section ---- */
+#canvas-section { display: flex; flex-direction: column; min-height: 0; }
+#canvas-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--stage-bg);
+  padding: 10px;
+}
+#artwork-container {
+  position: relative;
+  width: min(1500px, 100%);
+  max-height: 100%;
+  aspect-ratio: 8 / 5;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+#artwork-container svg, #artwork-container img {
+  width: 100%; height: 100%; display: block;
+}
+#selection-overlay {
+  position: absolute;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  border-radius: 14px;
+  pointer-events: none;
+  z-index: 10;
+}
+#selection-overlay.drawing { pointer-events: auto; cursor: crosshair; }
+
+.toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--panel-edge);
+  background: var(--panel);
+  flex-wrap: wrap;
+}
+.tool-label { font-size: 11.5px; color: var(--muted); }
+.tool-btn { font-size: 12px; padding: 5px 10px; }
+.tool-btn.active { border-color: var(--accent); color: var(--accent); }
+.sep { width: 1px; height: 18px; background: var(--panel-edge); margin: 0 4px; }
+.tool-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--muted); cursor: pointer; user-select: none;
+}
+.tool-toggle input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+
+#region-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.region-chip {
+  font-size: 11.5px; padding: 4px 9px;
+  border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--panel-edge); background: var(--surface);
+  transition: 0.15s;
+}
+.region-chip:hover { border-color: var(--accent); }
+.region-chip.active { border-color: var(--accent); background: rgba(110,92,255,0.10); color: var(--accent); }
+.region-chip .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; }
+
+/* ---- inspector ---- */
+#inspector-section h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
+
+.insp-row { margin-bottom: 12px; }
+.insp-row label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.insp-row label span { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.insp-row input[type="text"] {
+  width: 100%; background: var(--surface); border: 1px solid var(--panel-edge);
+  border-radius: 6px; color: var(--text); padding: 6px 9px; font-size: 13px;
+}
+.insp-row input[type="range"] { width: 100%; margin-top: 3px; accent-color: var(--accent); }
+.motion-badge {
+  display: inline-block; font-size: 12px;
+  background: var(--surface); border: 1px solid var(--panel-edge);
+  border-radius: 6px; padding: 5px 10px; color: var(--muted);
+}
+.motion-badge.assigned { color: var(--accent); border-color: var(--accent); }
+.insp-actions { display: flex; gap: 6px; margin-top: 14px; }
+.insp-actions[hidden] { display: none; }
+
+/* ---- motion judge (Step 9) ---- */
+.judge-hint { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin: 0 0 4px; }
+#judge-out { margin-top: 12px; }
+.judge-busy, .judge-err { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.judge-err { color: var(--accent-2); }
+
+.judge-score { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.judge-score strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.judge-score span {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  padding: 2px 6px; border-radius: 4px; background: var(--panel-edge); color: var(--muted);
+}
+.judge-score em { font-size: 10.5px; color: var(--muted); font-style: normal; margin-left: auto; }
+.judge-score.good strong { color: var(--good); }
+.judge-score.mid  strong { color: var(--warn); }
+.judge-score.bad  strong { color: var(--accent-2); }
+
+.judge-critique { font-size: 12.5px; line-height: 1.5; margin: 0 0 10px; }
+
+.judge-axes { display: grid; gap: 4px; margin-bottom: 10px; }
+.judge-axis { display: grid; grid-template-columns: 62px 1fr 34px; align-items: center; gap: 6px; }
+.judge-axis span { font-size: 10.5px; color: var(--muted); }
+.judge-axis i { height: 4px; border-radius: 2px; background: var(--accent); display: block; }
+.judge-axis b {
+  font-size: 10.5px; color: var(--muted); font-weight: 500; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.judge-obs { margin: 0 0 10px; padding-left: 16px; }
+.judge-obs li { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.judge-meta { font-size: 10.5px; color: var(--muted); line-height: 1.45; margin-top: 4px; }
+
+/* ---- footer ---- */
+footer { padding: 7px 20px; border-top: 1px solid var(--panel-edge); }
+#status { font-size: 12px; color: var(--muted); }
+#status.flash { color: var(--good); }
+
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+/* ---- theme toggle (bottom-right) ---- */
+.theme-toggle {
+  position: fixed; right: 18px; bottom: 16px; z-index: 100;
+  width: 42px; height: 42px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; line-height: 1;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.12s;
+}
+.theme-toggle:hover { background: var(--btn-hover); transform: translateY(-1px); }
+
+/* ---- limb retarget + travel-route inspector controls (merged from Motion-Life-main) ---- */
+.insp-hint { margin: 5px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.insp-row select {
+  width: 100%; padding: 6px 8px; border-radius: 8px; font-size: 12px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--panel-edge);
+}
+
+/* ---- Preview popup: input artwork | animated MotionLife result ---- */
+.preview-modal {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(6, 7, 12, 0.92);
+  display: flex; align-items: center; justify-content: center;
+  animation: xm-in 0.2s ease;
+}
+.preview-panel {
+  /* width/height are set by sizePreviewPanel() in main.js so the panel hugs the
+     artwork's real aspect ratio — no letterbox bars, images as large as they fit. */
+  width: min(94vw, 1200px); max-width: 96vw; max-height: 94vh;
+  display: flex; flex-direction: column;
+  background: rgba(22, 24, 34, 0.98);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px; overflow: hidden;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+}
+.preview-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 16px; border-bottom: 1px solid var(--panel-edge);
+  background: var(--panel); flex: 0 0 auto;
+}
+.preview-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.preview-tabs { display: flex; align-items: center; gap: 8px; }
+.preview-tag {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); background: var(--surface); border: 1px solid var(--panel-edge);
+  border-radius: 999px; padding: 3px 10px;
+}
+.preview-tag.live { color: #fff; background: var(--accent); border-color: transparent; }
+.preview-arrow { color: var(--muted); }
+.preview-close { margin-left: auto; }
+.preview-body {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; gap: 14px; padding: 16px; background: var(--stage-bg);
+}
+.preview-frame { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.preview-frame figcaption {
+  flex: 0 0 auto; text-align: center;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+}
+.preview-input, .preview-live {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #000; border-radius: 10px; overflow: hidden;
+}
+.preview-input svg, .preview-input img {
+  width: 100%; height: 100%; object-fit: contain; display: block;
+}
+.preview-empty { color: var(--muted); font-size: 12.5px; padding: 20px; text-align: center; }

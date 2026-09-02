@@ -1,0 +1,18 @@
+torch>=2.4
+torchvision>=0.19
+numpy
+opencv-python-headless
+fastapi
+uvicorn
+python-multipart
+# Optional engines (the service runs without them; /engines reports what's missing):
+transformers>=5.15   # Depth Anything V2 Small — /analyze?preprocess=1&depth=1
+# SAM 2.1 hiera-tiny — object mask for ?preprocess=1 (falls back to GrabCut when absent).
+# Deliberately NOT installed by -r: prefer Meta's git over the PyPI name, which is a
+# third-party repackage (owner "Jorge Insua", not Meta) — its 1.1.0 sdist was diffed
+# byte-identical to facebookresearch/sam2 HEAD, but pin it if you use it. Set MS_SAM2=0
+# to skip the engine entirely. Apache-2.0, pure Python, py>=3.10, no wheel needed.
+#   pip install --no-build-isolation 'git+https://github.com/facebookresearch/sam2.git'
+# SAM2_BUILD_CUDA=0 just saves time: the CUDA ext build already fails silently and both
+# call sites (utils/misc.py, utils/transforms.py) are try/except-guarded. Do NOT use
+# INSTALL.md's ".[notebooks]" extra — it pulls eva-decord, which has no py3.13 wheel.

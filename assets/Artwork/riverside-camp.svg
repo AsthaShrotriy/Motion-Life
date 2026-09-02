@@ -1,0 +1,123 @@
+<svg viewBox="0 0 1280 800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="rc-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#1a1636"/>
+      <stop offset="38%" stop-color="#3a2a5c"/>
+      <stop offset="66%" stop-color="#7d4d76"/>
+      <stop offset="100%" stop-color="#d98a63"/>
+    </linearGradient>
+    <radialGradient id="rc-moonglow" cx="0.24" cy="0.2" r="0.28">
+      <stop offset="0%" stop-color="#fdf3d8" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#fdf3d8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rc-hill-far" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a3a63"/><stop offset="100%" stop-color="#3a2d52"/>
+    </linearGradient>
+    <linearGradient id="rc-hill-near" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2b2340"/><stop offset="100%" stop-color="#1d1830"/>
+    </linearGradient>
+    <linearGradient id="rc-river" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c98a63"/>
+      <stop offset="30%" stop-color="#9d6d7e"/>
+      <stop offset="100%" stop-color="#3f3358"/>
+    </linearGradient>
+    <radialGradient id="rc-fireglow" cx="0.5" cy="0.6" r="0.6">
+      <stop offset="0%" stop-color="#ffb24d" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#ffb24d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rc-flame" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#ff6a2c"/><stop offset="55%" stop-color="#ffab3d"/><stop offset="100%" stop-color="#ffe58a"/>
+    </linearGradient>
+    <filter id="rc-soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="5"/></filter>
+  </defs>
+
+  <!-- ===== STATIC BACKDROP ===== -->
+  <rect id="rc-sky" width="1280" height="800" fill="url(#rc-sky)"/>
+  <rect id="rc-moon-glow" width="1280" height="560" fill="url(#rc-moonglow)"/>
+  <circle id="rc-moon" cx="300" cy="150" r="46" fill="#fdf3d8"/>
+  <g id="rc-stars" fill="#fdf3d8">
+    <circle cx="120" cy="90" r="1.5" opacity="0.8"/><circle cx="520" cy="70" r="1.2" opacity="0.6"/>
+    <circle cx="760" cy="120" r="1.5" opacity="0.7"/><circle cx="980" cy="80" r="1.2" opacity="0.6"/>
+    <circle cx="1140" cy="150" r="1.4" opacity="0.7"/><circle cx="640" cy="150" r="1" opacity="0.5"/>
+    <circle cx="440" cy="130" r="1" opacity="0.5"/><circle cx="1040" cy="200" r="1.2" opacity="0.5"/>
+  </g>
+  <!-- distant hills -->
+  <path id="rc-hill-far" d="M 0,430 C 200,380 380,410 560,400 C 760,388 980,414 1280,392 L 1280,520 L 0,520 Z" fill="url(#rc-hill-far)"/>
+  <path id="rc-hill-near" d="M 0,500 C 240,470 460,486 700,478 C 940,470 1120,490 1280,480 L 1280,560 L 0,560 Z" fill="url(#rc-hill-near)"/>
+
+  <!-- riverbanks (static ground) -->
+  <path id="rc-bank-far" d="M 0,470 C 300,455 520,475 760,470 C 1000,465 1160,478 1280,472 L 1280,520 L 0,520 Z" fill="#2a2138"/>
+  <path id="rc-bank-near" d="M 0,690 C 260,660 520,676 820,668 C 1060,662 1180,674 1280,670 L 1280,800 L 0,800 Z" fill="#1a1526"/>
+
+  <!-- hut (static) -->
+  <g id="rc-hut">
+    <rect x="960" y="560" width="150" height="110" fill="#2e2338"/>
+    <path d="M 946,560 L 1035,506 L 1124,560 Z" fill="#3d2f45"/>
+    <rect x="1000" y="600" width="34" height="70" fill="#fbb861" opacity="0.85"/>
+    <rect x="1000" y="600" width="34" height="70" fill="#ffcf8a" opacity="0.4" filter="url(#rc-soft)"/>
+  </g>
+  <!-- fire pit stones (static) -->
+  <ellipse id="rc-fireglow-e" cx="360" cy="700" rx="130" ry="100" fill="url(#rc-fireglow)"/>
+  <ellipse id="rc-firepit" cx="360" cy="712" rx="58" ry="16" fill="#231a2e"/>
+  <!-- logs -->
+  <g id="rc-logs" fill="#3a2a22">
+    <rect x="326" y="704" width="70" height="12" rx="6" transform="rotate(12 360 710)"/>
+    <rect x="326" y="704" width="70" height="12" rx="6" transform="rotate(-14 360 710)"/>
+  </g>
+
+  <!-- ===== ANIMATABLE LAYERS ===== -->
+
+  <!-- 1) RIVER — flowing water motion (field replay warps the highlight bands) -->
+  <g class="layer" data-name="river">
+    <path d="M 0,560 C 260,540 520,556 820,548 C 1060,542 1180,554 1280,550 L 1280,690 C 1000,672 760,684 460,678 C 240,674 120,682 0,690 Z" fill="url(#rc-river)"/>
+    <path d="M 120,590 C 360,578 620,590 900,584" stroke="#e6b088" stroke-width="4" fill="none" opacity="0.55"/>
+    <path d="M 200,620 C 440,610 700,620 1000,614" stroke="#c98aa0" stroke-width="3" fill="none" opacity="0.45"/>
+    <path d="M 80,650 C 340,642 600,650 920,646" stroke="#f0c39a" stroke-width="3" fill="none" opacity="0.4"/>
+    <path d="M 260,672 C 520,664 780,672 1080,668" stroke="#b98aa8" stroke-width="2.5" fill="none" opacity="0.35"/>
+  </g>
+
+  <!-- 2) BOAT — moored, gentle bob (rides river motion) -->
+  <g class="layer" data-name="boat">
+    <path d="M 150,636 C 175,662 275,662 300,636 C 270,648 180,648 150,636 Z" fill="#2a2030"/>
+    <path d="M 158,640 C 182,658 268,658 292,640" fill="none" stroke="#4a3a52" stroke-width="2"/>
+    <rect x="222" y="596" width="4" height="44" fill="#4a3a52"/>
+    <path d="M 226,600 L 262,624 L 226,628 Z" fill="#d98a63" opacity="0.9"/>
+  </g>
+
+  <!-- 3) BIRDS — drifting flock -->
+  <g class="layer" data-name="birds">
+    <g stroke="#1a1428" stroke-width="3" fill="none" stroke-linecap="round">
+      <path d="M 560,180 C 572,172 584,172 596,180"/>
+      <path d="M 620,200 C 632,192 644,192 656,200"/>
+      <path d="M 680,168 C 692,160 704,160 716,168"/>
+      <path d="M 640,150 C 652,142 664,142 676,150"/>
+      <path d="M 720,196 C 732,188 744,188 756,196"/>
+      <path d="M 590,220 C 602,212 614,212 626,220"/>
+    </g>
+  </g>
+
+  <!-- 4) CAMPFIRE FLAMES — flicker -->
+  <g class="layer" data-name="fire">
+    <path d="M 360,708 C 340,684 348,660 358,640 C 366,662 372,650 378,636 C 388,656 384,684 370,708 Z" fill="url(#rc-flame)"/>
+    <path d="M 360,706 C 350,690 356,674 362,662 C 368,676 372,668 376,658 C 382,674 378,692 368,706 Z" fill="#ffe58a" opacity="0.85"/>
+  </g>
+
+  <!-- 5) SMOKE — rising waver -->
+  <g class="layer" data-name="smoke" opacity="0.5">
+    <path d="M 366,636 C 356,610 380,596 370,566 C 362,540 384,524 376,496" fill="none" stroke="#c9c0d4" stroke-width="10" stroke-linecap="round" filter="url(#rc-soft)"/>
+  </g>
+
+  <!-- 6) TREES — sway (a silhouette pair on the near bank) -->
+  <g class="layer" data-name="trees">
+    <path d="M 1150,690 C 1140,620 1150,560 1136,500 L 1164,500 C 1150,560 1160,620 1170,690 Z" fill="#141020"/>
+    <ellipse cx="1150" cy="474" rx="60" ry="70" fill="#1d1730"/>
+    <ellipse cx="1120" cy="500" rx="44" ry="52" fill="#171226"/>
+    <ellipse cx="1182" cy="502" rx="42" ry="50" fill="#171226"/>
+  </g>
+
+  <!-- ===== TITLE ===== -->
+  <g class="layer" data-name="title">
+    <text x="640" y="756" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+      font-size="46" font-weight="700" letter-spacing="3" fill="#fbeadd" opacity="0.95">Riversong Camp</text>
+  </g>
+</svg>

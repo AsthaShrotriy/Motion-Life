@@ -1,0 +1,44 @@
+<svg viewBox="0 0 900 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cd-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bfe3ee"/><stop offset="70%" stop-color="#e7f4f0"/>
+      <stop offset="100%" stop-color="#eef3ea"/>
+    </linearGradient>
+    <linearGradient id="cd-ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#cfe6a8"/><stop offset="100%" stop-color="#a9d17c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- backdrop (static; id-only = not selectable) -->
+  <rect id="cd-skyrect" width="900" height="500" fill="url(#cd-sky)"/>
+  <rect id="cd-groundrect" y="486" width="900" height="154" fill="url(#cd-ground)"/>
+  <ellipse id="cd-shadow" cx="450" cy="500" rx="120" ry="16" fill="#6f8a4a" opacity="0.28"/>
+
+  <!-- ===== rigged character (selectable, driven by a character motion swatch) =====
+       Drawn in a LOCAL frame centred on the body (0,0); the group transform places
+       it in the scene. The animator repositions the data-role parts each frame. -->
+  <g class="layer" data-name="Duck" data-motion-mode="character" data-leg="150"
+     transform="translate(450 300)">
+    <!-- legs first (behind body) -->
+    <polyline data-role="leg-far"  points="-14,52 -14,120 -14,175" fill="none"
+              stroke="#e8892b" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>
+    <ellipse  data-role="foot-far" cx="-6" cy="177" rx="16" ry="6" fill="#e8892b" opacity="0.75"/>
+    <polyline data-role="leg-near" points="14,52 14,120 14,175" fill="none"
+              stroke="#f0a030" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse  data-role="foot-near" cx="22" cy="177" rx="18" ry="7" fill="#f0a030"/>
+    <!-- body -->
+    <g data-role="body">
+      <ellipse cx="0" cy="0" rx="96" ry="70" fill="#ffd23f"/>
+      <path d="M -96 -6 q -46 -6 -70 -34 q 44 8 70 6 Z" fill="#f2c02e"/>
+      <ellipse cx="22" cy="6" rx="52" ry="40" fill="#f7c62f"/>
+      <path d="M 44 -40 q 42 -18 60 -70 q 6 40 -14 78 Z" fill="#ffd23f"/>
+    </g>
+    <!-- head -->
+    <g data-role="head" transform="translate(96 -64)">
+      <circle cx="0" cy="0" r="38" fill="#ffd23f"/>
+      <path d="M 30 -4 l 46 8 l -46 14 Z" fill="#f28c1e"/>
+      <circle cx="-6" cy="-10" r="6" fill="#1a1a2a"/>
+      <circle cx="-8" cy="-12" r="2" fill="#fff"/>
+    </g>
+  </g>
+</svg>

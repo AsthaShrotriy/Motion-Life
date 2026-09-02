@@ -1,0 +1,6 @@
+# SEA-RAFT flow engine deps (opt-in, heavier than raft_small).
+# Repo itself is NOT pip-installable: run service/setup-searaft.sh (git clone into service/SEA-RAFT).
+einops
+huggingface_hub
+safetensors
+scipy

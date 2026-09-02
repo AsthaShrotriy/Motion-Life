@@ -1,0 +1,105 @@
+<svg viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tw-outsky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#dfeaf0"/><stop offset="100%" stop-color="#eef3ee"/>
+    </linearGradient>
+    <clipPath id="tw-winclip">
+      <rect x="392" y="150" width="560" height="470" rx="26"/>
+    </clipPath>
+    <filter id="tw-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+
+  <!-- ===== STATIC: interior back wall + cabin ===== -->
+  <rect id="tw-wall" width="1000" height="1000" fill="#e9e4d3"/>
+  <path id="tw-ceil" d="M 0,0 L 1000,0 L 1000,150 C 700,120 300,120 0,150 Z" fill="#7d8a5c"/>
+  <rect id="tw-ceil2" x="0" y="140" width="1000" height="30" fill="#5f6b45"/>
+
+  <!-- ===== WINDOW: outer frame (static) ===== -->
+  <rect id="tw-frame" x="372" y="130" width="600" height="510" rx="34" fill="#c98a4e"/>
+  <rect id="tw-frame2" x="384" y="142" width="576" height="486" rx="28" fill="#b0763f"/>
+  <rect id="tw-winbg" x="392" y="150" width="560" height="470" rx="26" fill="url(#tw-outsky)"/>
+
+  <!-- ===== ANIMATABLE LAYERS (clipped to window) ===== -->
+  <g clip-path="url(#tw-winclip)">
+    <!-- 1) LANDSCAPE — drifts backward as the train moves forward (horizontal) -->
+    <g class="layer" data-name="landscape">
+      <!-- extra width so it can drift without exposing an edge -->
+      <path d="M 340,470 C 470,380 560,400 680,360 C 820,315 940,350 1060,320 L 1060,470 Z" fill="#9cae74"/>
+      <path d="M 340,430 C 520,360 700,392 900,352 C 980,336 1030,342 1060,338 L 1060,470 L 340,470 Z" fill="#b6c48c" opacity="0.7"/>
+      <!-- distant mountains -->
+      <path d="M 700,350 L 780,270 L 860,350 Z" fill="#8090a0" opacity="0.8"/>
+      <path d="M 820,352 L 900,286 L 980,352 Z" fill="#8090a0" opacity="0.7"/>
+      <!-- pine trees -->
+      <g fill="#4a6340">
+        <path d="M 430,470 L 452,420 L 474,470 Z"/><path d="M 436,448 L 452,410 L 468,448 Z"/>
+        <path d="M 500,474 L 520,430 L 540,474 Z"/>
+        <path d="M 640,470 L 660,424 L 680,470 Z"/><path d="M 646,450 L 660,414 L 674,450 Z"/>
+      </g>
+      <!-- village -->
+      <g fill="#e8e2d4">
+        <rect x="880" y="404" width="26" height="26"/><rect x="912" y="398" width="22" height="32"/>
+        <rect x="940" y="408" width="24" height="22"/>
+      </g>
+      <g fill="#b45a4a">
+        <path d="M 878,404 L 893,392 L 908,404 Z"/><path d="M 910,398 L 923,386 L 936,398 Z"/>
+      </g>
+      <!-- railway track curving off to the right -->
+      <path d="M 1040,470 C 940,560 800,600 700,640 L 720,660 C 830,616 960,576 1060,500 Z" fill="#7a6f5c" opacity="0.8"/>
+      <g stroke="#5a5040" stroke-width="3" opacity="0.7">
+        <line x1="1050" y1="480" x2="710" y2="650"/><line x1="1058" y1="498" x2="726" y2="662"/>
+      </g>
+    </g>
+
+    <!-- 2) RIVER — winding, flowing water -->
+    <g class="layer" data-name="river">
+      <path d="M 400,470 C 460,500 500,540 560,556 C 610,570 640,600 660,640
+               L 610,640 C 590,604 560,584 520,566 C 470,544 430,510 392,486 Z"
+            fill="#7fb0c9"/>
+      <path d="M 430,494 C 490,520 528,556 580,576" stroke="#dff0f6" stroke-width="4" fill="none" opacity="0.7"/>
+      <path d="M 420,510 C 480,536 520,570 570,592" stroke="#b6dcea" stroke-width="3" fill="none" opacity="0.6"/>
+    </g>
+  </g>
+
+  <!-- glass sheen (static, above landscape) -->
+  <path id="tw-sheen" d="M 392,150 L 560,150 L 392,420 Z" fill="#ffffff" opacity="0.08"/>
+
+  <!-- ===== STATIC INTERIOR FOREGROUND ===== -->
+  <!-- luggage rack + suitcase -->
+  <rect id="tw-rack" x="40" y="300" width="300" height="16" rx="6" fill="#7d8a5c"/>
+  <g id="tw-suitcase">
+    <rect x="70" y="210" width="200" height="90" rx="12" fill="#b98a52"/>
+    <rect x="70" y="248" width="200" height="10" fill="#8a6238"/>
+    <rect x="150" y="196" width="44" height="20" rx="6" fill="#8a6238"/>
+  </g>
+  <!-- seat -->
+  <path id="tw-seat" d="M 40,440 C 120,420 220,420 300,440 L 320,900 L 20,900 Z" fill="#3f4a52"/>
+  <path id="tw-seatframe" d="M 300,440 L 360,470 L 360,900 L 300,900 Z" fill="#c98a4e"/>
+  <!-- woman silhouette -->
+  <g id="tw-woman" fill="#5a6b3f">
+    <ellipse cx="250" cy="470" rx="34" ry="38"/>
+    <path d="M 216,468 C 210,430 230,410 250,410 C 270,410 290,430 284,468 C 300,540 296,660 280,760 L 210,760 C 214,650 208,540 216,468 Z"/>
+    <path d="M 250,510 C 210,520 190,560 200,620 L 230,616 C 226,576 240,548 264,540 Z" fill="#4a5a34"/>
+  </g>
+  <ellipse id="tw-head" cx="250" cy="420" rx="26" ry="30" fill="#c99a72"/>
+  <path id="tw-hair" d="M 224,406 C 220,378 240,364 250,364 C 260,364 280,378 276,406 C 276,430 268,446 258,452 C 268,430 262,410 250,406 C 238,410 232,430 242,452 C 232,446 224,430 224,406 Z" fill="#4a352a"/>
+
+  <!-- table + ticket -->
+  <rect id="tw-table" x="430" y="700" width="240" height="18" rx="4" fill="#c98a4e"/>
+  <rect id="tw-tableleg" x="540" y="718" width="14" height="180" fill="#a8703a"/>
+  <rect id="tw-ticket" x="560" y="694" width="86" height="18" rx="2" fill="#f2ede0" transform="rotate(-4 603 703)"/>
+
+  <!-- coffee cup (static) -->
+  <g id="tw-cup">
+    <ellipse cx="486" cy="700" rx="34" ry="10" fill="#e8e2d4"/>
+    <path d="M 456,698 C 458,672 514,672 516,698 C 512,712 460,712 456,698 Z" fill="#f2ede0"/>
+    <ellipse cx="486" cy="682" rx="26" ry="7" fill="#6f4a32"/>
+    <path d="M 514,684 C 534,682 534,706 514,704" fill="none" stroke="#e8e2d4" stroke-width="5"/>
+  </g>
+
+  <!-- 3) STEAM — rising from the coffee (captured from a smoke/fire clip) -->
+  <g class="layer" data-name="steam" opacity="0.55">
+    <path d="M 486,676 C 476,652 500,638 490,610 C 482,586 504,570 496,544"
+          fill="none" stroke="#cfc8bc" stroke-width="9" stroke-linecap="round" filter="url(#tw-soft)"/>
+    <path d="M 500,672 C 512,650 492,634 504,608" fill="none" stroke="#dcd6cc" stroke-width="6" stroke-linecap="round" filter="url(#tw-soft)"/>
+  </g>
+</svg>
