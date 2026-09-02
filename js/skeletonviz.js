@@ -65,7 +65,11 @@ window.showSkeleton = function showSkeleton(videoUrl, pose, color = '#34d399') {
         '</div>' +
         '<div style="display:flex;gap:14px;align-items:stretch">' +
           '<div style="position:relative">' +
-            '<video muted playsinline loop style="width:300px;height:300px;object-fit:cover;' +
+            // contain, not cover: this box is square and sits beside a square skeleton
+            // canvas, so it stays 300x300 — but a portrait clip letterboxes on the black
+            // background instead of losing its top and bottom, which on a phone clip is
+            // the head and the feet, i.e. the joints the skeleton beside it is drawing.
+            '<video muted playsinline loop style="width:300px;height:300px;object-fit:contain;' +
               'border-radius:10px;background:#000;display:block"></video>' +
             '<div style="position:absolute;left:8px;bottom:8px;color:#e0e0e0;font:500 11px system-ui;' +
               'background:rgba(0,0,0,.5);padding:2px 8px;border-radius:6px">source video</div>' +

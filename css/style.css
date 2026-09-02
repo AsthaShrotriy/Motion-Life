@@ -209,9 +209,13 @@ main.right-collapsed { grid-template-columns: 280px 1fr 40px; }
 .video-row-main { display: flex; align-items: flex-start; gap: 10px; padding: 8px; }
 /* left: a big video with its name below it */
 .video-preview { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* `contain` on the element itself: there is no overlay to register here, so the
+   clip is simply letterboxed on the black backdrop and none of it is lost.
+   js/videofit.js gives the box the clip's ratio, CLAMPED (see the call site) so a
+   9/16 phone clip does not turn one row of a scrolling list into a skyscraper. */
 .video-thumb {
   width: 100%; aspect-ratio: 16 / 10; flex: 0 0 auto;
-  border-radius: 6px; object-fit: cover; background: #000; display: block;
+  border-radius: 6px; object-fit: contain; background: #000; display: block;
 }
 .video-meta { min-width: 0; }
 .video-name {
@@ -350,16 +354,24 @@ main.right-collapsed #right-panel { overflow: visible; }
 }
 .extract-modal.closing { opacity: 0; transition: opacity 0.25s; }
 @keyframes xm-in { from { opacity: 0; } }
+/* 16/10 is only the ratio BEFORE the clip's own is known — js/videofit.js
+   overwrites aspect-ratio with the video's, so the overlay canvas (inset 0 on
+   this same box, drawing normalized 0..1) lands on the picture instead of on a
+   letterbox bar. */
 .extract-stage {
   position: relative;
   width: min(78vw, 900px);
   aspect-ratio: 16/10;
+  background: #000;
   border-radius: 14px; overflow: hidden;
   box-shadow: 0 30px 90px rgba(0,0,0,0.6);
 }
+/* a portrait box at the authored width would run off the bottom of the window,
+   so drive it from height and let the ratio pick the width */
+.extract-stage.is-portrait { width: auto; height: min(78vh, 760px); }
 .extract-stage video {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; filter: brightness(0.75);
+  object-fit: contain; filter: brightness(0.75);
 }
 .extract-stage canvas {
   position: absolute; inset: 0; width: 100%; height: 100%;
@@ -402,6 +414,9 @@ main.right-collapsed #right-panel { overflow: visible; }
 .mx-body { display: flex; gap: 14px; align-items: flex-start; }
 /* bigger video; the small swatch column needs less reserved room */
 .mx-modal .extract-stage { width: min(70vw, 860px, calc(96vw - 150px)); }
+/* the swatch column sits beside the stage, so a tall clip gets less height here
+   than in the single-motion modal — the shell has a header row above it too */
+.mx-modal .extract-stage.is-portrait { width: auto; height: min(70vh, 660px); }
 .mx-modal .extract-skip { position: static; align-self: flex-start; }
 
 /* right column of extracted-motion swatches: an animated mini-canvas + caption per
@@ -489,6 +504,8 @@ main.right-collapsed #right-panel { overflow: visible; }
   min-height: 0;
   overflow: hidden;
 }
+/* as .extract-stage: 16/10 is the pre-metadata ratio, js/videofit.js replaces it
+   with the clip's so .mp-viz stays registered to the picture */
 .mp-stage {
   position: relative;
   border-radius: 10px; overflow: hidden;
@@ -496,9 +513,14 @@ main.right-collapsed #right-panel { overflow: visible; }
   aspect-ratio: 16 / 10;
   align-self: start;
 }
+/* height-driven for a tall clip, and centred in its grid column since the box is
+   then narrower than the column it sits in */
+.mp-stage.is-portrait {
+  width: auto; height: min(62vh, 520px); justify-self: center;
+}
 .mp-stage video {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; filter: brightness(0.75);
+  object-fit: contain; filter: brightness(0.75);
 }
 .mp-stage canvas {
   position: absolute; inset: 0; width: 100%; height: 100%;

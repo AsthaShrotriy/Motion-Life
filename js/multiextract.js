@@ -77,6 +77,10 @@ window.startExtractionReveal = function startExtractionReveal(videoUrl, opts = {
   const statusText = modal.querySelector('.mx-status-text');
   const ctx = canvas.getContext('2d');
   video.src = videoUrl;
+  // Same reason as extractviz: the trajectory fields are drawn on a canvas inset 0
+  // over this stage in normalized coordinates, so the stage has to be the shape of
+  // the clip or the fields sit beside the subject rather than on it.
+  if (window.fitVideoBox) window.fitVideoBox(video, modal.querySelector('.extract-stage'));
 
   let resolveDone;
   const promise = new Promise(r => { resolveDone = r; });

@@ -1015,6 +1015,11 @@ function renderVideoList() {
     vid.src = v.url; vid.muted = true; vid.loop = true; vid.autoplay = true;
     vid.playsInline = true; vid.setAttribute('playsinline', '');
     preview.appendChild(vid);
+    // Take the clip's own ratio so a portrait phone clip is shown whole, but clamp
+    // it: these rows stack in a scrolling panel, and an unclamped 0.59 would make
+    // one clip taller than the panel. 0.75 leaves thin side bars on a 9/16 clip
+    // instead — `contain` guarantees the frame is complete either way.
+    if (window.fitVideoBox) window.fitVideoBox(vid, vid, { min: 0.75, max: 1.78 });
 
     const meta = document.createElement('div');
     meta.className = 'video-meta';
