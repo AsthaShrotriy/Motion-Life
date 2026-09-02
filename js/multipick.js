@@ -64,6 +64,10 @@ window.showMultiPick = function showMultiPick(videoUrl, regions, meta = {}) {
     const cardsEl = modal.querySelector('.mp-cards');
     const ctx = canvas.getContext('2d');
     video.src = videoUrl;
+    // .mp-viz draws each region's field and its dashed bbox in normalized
+    // coordinates over this stage, so the stage must be the clip's shape — a
+    // cropped picture under an uncropped bbox is how you pick the wrong region.
+    if (window.fitVideoBox) window.fitVideoBox(video, modal.querySelector('.mp-stage'));
 
     // per-region UI state
     const state = regions.map((r, i) => ({

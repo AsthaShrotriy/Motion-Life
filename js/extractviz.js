@@ -41,6 +41,10 @@ window.showExtraction = function showExtraction(videoUrl, trajectories, params, 
     const readout = modal.querySelector('.extract-readout');
     const ctx = canvas.getContext('2d');
     video.src = videoUrl;
+    // The stage takes the clip's ratio, which is what keeps THIS canvas honest:
+    // it is inset 0 on the stage and paints normalized 0..1, so any mismatch
+    // between box and picture shows up as streaks sliding off the subject.
+    if (window.fitVideoBox) window.fitVideoBox(video, modal.querySelector('.extract-stage'));
 
     const T = trajectories[0].length;
     let raf = null, done = false;
